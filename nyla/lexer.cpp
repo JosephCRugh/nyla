@@ -19,7 +19,7 @@ constexpr bool identifier_set[256] = {
 	1,1,1,1, 1,1,1,1, 1,1,1,0, 0,0,0,0,
 };
 
-constexpr bool whitespace_set[256] = {
+constexpr bool whitespace_set[256] = {             
 		0,0,0,0,0, 0,0,0,1,1,  // 0-9
 		1,1,1,1,0, 0,0,0,0,0,  // 10-19
 		0,0,0,0,0, 0,0,0,0,0,  // 20-29
@@ -33,6 +33,13 @@ constexpr bool digits_set[256] = {
 		0,0,0,0,0, 0,0,0,0,0,
 		0,0,0,0,0, 0,0,0,1,1,
 		1,1,1,1,1, 1,1,1,0,0,
+};
+
+constexpr bool eof_eol_set[256] = {
+// '\0'                       '\n'
+	1,   0,0,0, 0,0,0,0, 0,0,  1,  0,
+//    '\r'
+	0, 1
 };
 
 std::unordered_map<nyla::name, nyla::token_tag,
@@ -188,9 +195,19 @@ nyla::num_token* lexer::next_number() {
 void nyla::lexer::consume_ignored() {
 	bool continue_eating = false;
 	do {
+		// Eating whitespace
 		c8 ch = m_reader.cur_char();
 		while (whitespace_set[ch])
 			ch = m_reader.next_char();
-		continue_eating = whitespace_set[ch];
+		// Eating single line comments
+		if (ch == '`' && m_reader.peek_char() == '`') {
+			m_reader.next_char(); // Consuming `
+			m_reader.next_char(); // Consuming `
+			ch = m_reader.cur_char();
+			while (!eof_eol_set[ch])
+				ch = m_reader.next_char();
+		}
+		continue_eating = whitespace_set[ch] ||
+			              ch == '`' && m_reader.peek_char() == '`';
 	} while (continue_eating);
 }

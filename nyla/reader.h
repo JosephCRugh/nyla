@@ -18,6 +18,8 @@ namespace nyla {
 
 		c8 next_char();
 
+		c8 peek_char();
+
 		u32 position() const { return m_ptr; }
 
 		c8 operator[](u32 i) const;

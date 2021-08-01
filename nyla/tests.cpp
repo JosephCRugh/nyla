@@ -1,8 +1,13 @@
 #include "tests.h"
 
+#include "files_util.h"
+
 #include "parser.h"
 #include "test_suite.h"
+#include "gen_llvm.h"
 #include <assert.h>
+#include <fstream>
+#include <unordered_map>
 
 void run_reader_tests() {
 	test("reader tests");
@@ -50,10 +55,8 @@ void run_lexer_tests() {
 #define parser_setup(text) \
 nyla::reader reader(text); \
 nyla::lexer lexer(reader); \
-nyla::parser parser(lexer);
-
-//#define function_decl_test(text, return_type) \
-//parser_setup(text)                            \
+nyla::sym_table sym_table; \
+nyla::parser parser(lexer, sym_table);
 
 void function_decl_test(c_string text, nyla::type_tag return_type,
 	c_string fname,
@@ -87,4 +90,43 @@ void run_parser_tests() {
 		nyla::TYPE_FLOAT, "r___g",
 		{ nyla::TYPE_INT, nyla::TYPE_INT, nyla::TYPE_BYTE },
 		{ "y1", "x", "t4" });
+}
+
+
+
+std::unordered_map<std::string, int> program_err_codes = {
+	{ "a.nyla", 55 + 88 },
+	{ "simple_memory.nyla", 5+44 }
+};
+
+void run_llvm_gen_tests() {
+
+	nyla::init_native_target();
+
+	nyla::for_files(L"resources/*", [](const std::string& fpath) {
+		// TODO make sure they are .nyla files
+
+		c8* buffer;
+		nyla::read_file("resources/" + fpath, buffer);
+		parser_setup(buffer);
+			nyla::working_llvm_module = new llvm::Module("My Module", *nyla::llvm_context);
+		nyla::llvm_generator generator;
+		llvm::Function* function = generator.gen_function(parser.parse_function());
+		function->print(llvm::errs());
+		std::string out_path = fpath.substr(0, fpath.size()-5).append(".o");
+		nyla::write_obj_file(out_path.c_str());
+
+		system((std::string("clang++ -O0 ") + out_path + " -o program.exe").c_str());
+		int err_code = system("program.exe");
+		
+		auto it = program_err_codes.find(fpath);
+		if (it != program_err_codes.end()) {
+			check_eq(err_code, it->second, "Error code check");
+		}
+
+		delete[] buffer;
+
+	});
+
+	delete nyla::working_llvm_module;
 }

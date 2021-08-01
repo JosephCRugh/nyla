@@ -12,6 +12,13 @@ c8 reader::next_char() {
 	return cur_char();
 }
 
+c8 reader::peek_char() {
+	++m_ptr;
+	c8 ch = cur_char();
+	--m_ptr;
+	return ch;
+}
+
 c8 reader::operator[](u32 i) const {
 	return m_buffer[i];
 }

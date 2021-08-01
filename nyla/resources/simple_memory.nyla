@@ -1,0 +1,7 @@
+`` A program that test allocating variables
+`` and applying addition to them.
+int main() {
+	int a = 5;
+	int b = 44;
+	return a + b;
+}
