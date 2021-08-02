@@ -14,8 +14,6 @@
 
 #include "gen_llvm.h"
 
-#include "gen_llvm.h"
-
 int main() {
 
 	nyla::setup_lexer();
@@ -27,7 +25,7 @@ int main() {
 	run_parser_tests();
 	
 	nyla::init_llvm();
-
+	
 	run_llvm_gen_tests();
 
 	nyla::clean_llvm();

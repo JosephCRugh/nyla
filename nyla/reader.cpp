@@ -22,3 +22,11 @@ c8 reader::peek_char() {
 c8 reader::operator[](u32 i) const {
 	return m_buffer[i];
 }
+
+std::string nyla::reader::from_range(const std::tuple<u32, u32>& range) {
+	std::string str;
+	u32 len = std::get<1>(range) - std::get<0>(range);
+	str.resize(len);
+	memcpy(&str[0], &m_buffer[std::get<0>(range)], len);
+	return str;
+}

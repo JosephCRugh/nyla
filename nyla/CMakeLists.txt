@@ -16,14 +16,13 @@ include_directories(${LLVM_INCLUDE_DIRS})
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS})
 
-
 file(GLOB nyla_sources
 	${CMAKE_CURRENT_SOURCE_DIR}/*.h
 	${CMAKE_CURRENT_SOURCE_DIR}/*.cpp
 )
 
 # Add source to this project's executable.
-add_executable (nyla ${nyla_sources} "files_util.h" "files_util.cpp")
+add_executable (nyla ${nyla_sources})
 
 #LLVM Components provide access to the underlying libraries without having
 # to specify the libraries being used.
@@ -49,7 +48,7 @@ target_link_libraries(nyla ${llvm_libs})
 message(STATUS "FROM DIRECTORY: ${CMAKE_CURRENT_SOURCE_DIR}/resources")
 message(STATUS "TO DIRECTORY: ${CMAKE_BINARY_DIR}/nyla")
 
-add_custom_command(TARGET nyla PRE_BUILD
+add_custom_command(TARGET nyla POST_BUILD
 	COMMAND ${CMAKE_COMMAND} -E copy_directory
 		${CMAKE_CURRENT_SOURCE_DIR}/resources $<TARGET_FILE_DIR:nyla>/resources
 		)

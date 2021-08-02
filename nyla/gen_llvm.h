@@ -48,10 +48,13 @@ namespace nyla {
 
 		llvm::Value* gen_variable_decl(nyla::avariable_decl* variable_decl);
 
+		llvm::Value* gen_for_loop(nyla::afor_loop* for_loop);
+
 		llvm::Value* gen_variable(nyla::avariable* variable);
 
 	private:
 		nyla::sym_table   m_sym_table;
 		llvm::BasicBlock* m_bb;
+		llvm::Function*   m_ll_function;
 	};
 }

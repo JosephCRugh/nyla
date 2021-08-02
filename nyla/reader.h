@@ -1,6 +1,7 @@
 #pragma once
 
-#include <string.h>
+#include <string>
+#include <tuple>
 #include "types_ext.h"
 
 namespace nyla {
@@ -23,6 +24,8 @@ namespace nyla {
 		u32 position() const { return m_ptr; }
 
 		c8 operator[](u32 i) const;
+
+		std::string from_range(const std::tuple<u32, u32>& range);
 
 	private:
 		u32      m_length;

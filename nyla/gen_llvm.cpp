@@ -95,11 +95,12 @@ llvm::Function* llvm_generator::gen_function(nyla::afunction* function) {
 	nyla::llvm_builder->SetInsertPoint(ll_basic_block);
 
 	m_bb = ll_basic_block;
+	m_ll_function = ll_function;
 	// scope may be nullptr if all that was parsed was
 	// a function declaration.
 	if (function->scope != nullptr) {
-		for (nyla::aexpr* expr : function->scope->expressions) {
-			gen_expression(expr);
+		for (nyla::aexpr* stmt : function->scope->stmts) {
+			gen_expression(stmt);
 		}
 	}
 
@@ -132,14 +133,16 @@ llvm::Value* nyla::llvm_generator::gen_expression(nyla::aexpr* expr) {
 	switch (expr->tag) {
 	case AST_RETURN:
 		return gen_return(dynamic_cast<nyla::areturn*>(expr));
+	case AST_VARIABLE_DECL:
+		return gen_variable_decl(dynamic_cast<nyla::avariable_decl*>(expr));
 	case AST_VALUE_INT:
 		return gen_number(dynamic_cast<nyla::anumber*>(expr));
 	case AST_BINARY_OP:
 		return gen_binary_op(dynamic_cast<nyla::abinary_op*>(expr));
 	case AST_VARIABLE:
 		return gen_variable(dynamic_cast<nyla::avariable*>(expr));
-	case AST_VARIABLE_DECL:
-		return gen_variable_decl(dynamic_cast<nyla::avariable_decl*>(expr));
+	case AST_FOR_LOOP:
+		return gen_for_loop(dynamic_cast<nyla::afor_loop*>(expr));
 	}
 	return nullptr;
 }
@@ -178,8 +181,31 @@ llvm::Value* llvm_generator::gen_binary_op(nyla::abinary_op* binary_op) {
 	case '+': {
 		llvm::Value* ll_lhs = gen_expression(binary_op->lhs);
 		llvm::Value* ll_rhs = gen_expression(binary_op->rhs);
-		return nyla::llvm_builder->CreateAdd(ll_lhs, ll_rhs);
+		return nyla::llvm_builder->CreateAdd(ll_lhs, ll_rhs, "addt");
 	}
+	case '-': {
+		llvm::Value* ll_lhs = gen_expression(binary_op->lhs);
+		llvm::Value* ll_rhs = gen_expression(binary_op->rhs);
+		return nyla::llvm_builder->CreateSub(ll_lhs, ll_rhs, "subt");
+	}
+	case '*': {
+		llvm::Value* ll_lhs = gen_expression(binary_op->lhs);
+		llvm::Value* ll_rhs = gen_expression(binary_op->rhs);
+		return nyla::llvm_builder->CreateMul(ll_lhs, ll_rhs, "mult");
+	}
+	case '/': {
+		llvm::Value* ll_lhs = gen_expression(binary_op->lhs);
+		llvm::Value* ll_rhs = gen_expression(binary_op->rhs);
+		return nyla::llvm_builder->CreateSDiv(ll_lhs, ll_rhs, "divt");
+	}
+	case '<': {
+		llvm::Value* ll_lhs = gen_expression(binary_op->lhs);
+		llvm::Value* ll_rhs = gen_expression(binary_op->rhs);
+		return nyla::llvm_builder->CreateICmpULT(ll_lhs, ll_rhs, "cmplt");
+	}
+	default:
+		assert(!"An operator has not been handled!");
+		break;
 	}
 	return nullptr;
 }
@@ -196,6 +222,48 @@ llvm::Value* nyla::llvm_generator::gen_variable_decl(nyla::avariable_decl* varia
 		gen_expression(variable_decl->assignment);
 	}
 	return var_alloca;
+}
+
+llvm::Value* nyla::llvm_generator::gen_for_loop(nyla::afor_loop* for_loop) {
+	
+	// Generating declarations before entering the loop
+	for (nyla::avariable_decl* var_decl : for_loop->declarations) {
+		gen_variable_decl(var_decl);
+	}
+
+	// Top of loop with condition
+	llvm::BasicBlock* ll_cond_bb = llvm::BasicBlock::Create(*llvm_context, "loopcond", m_ll_function);
+
+	// Jumping directly into the loop condition
+	nyla::llvm_builder->CreateBr(ll_cond_bb);
+	// Telling llvm we want to put code into the loop condition block
+	nyla::llvm_builder->SetInsertPoint(ll_cond_bb);
+
+	llvm::BasicBlock* ll_loop_body_bb = llvm::BasicBlock::Create(*llvm_context, "loopbody", m_ll_function);
+
+	// Generating the condition and telling it to jump to the body or the finish point
+	llvm::Value* ll_cond = gen_expression(for_loop->cond);
+	llvm::BasicBlock* ll_finish_bb = llvm::BasicBlock::Create(*llvm_context, "finishloop", m_ll_function);
+	nyla::llvm_builder->CreateCondBr(ll_cond, ll_loop_body_bb, ll_finish_bb);
+	
+	// Telling llvm we want to put code into the loop body
+	nyla::llvm_builder->SetInsertPoint(ll_loop_body_bb);
+
+	// Generating the body of the loop
+	for (nyla::aexpr* stmt : for_loop->body) {
+		gen_expression(stmt);
+	}
+	// Post loop expression
+	gen_expression(for_loop->post);
+
+	// Unconditional branch back to the condition
+	nyla::llvm_builder->CreateBr(ll_cond_bb);
+
+	// All new code will be inserted into the block after
+	// the loop
+	nyla::llvm_builder->SetInsertPoint(ll_finish_bb);
+	
+	return nullptr;
 }
 
 llvm::Value* nyla::llvm_generator::gen_variable(nyla::avariable* variable) {

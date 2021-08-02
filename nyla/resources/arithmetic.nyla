@@ -1,0 +1,10 @@
+`` Test standard arithmetic operators
+int main() {
+	int b = 22;
+	int sum = 44 * 3 + 55 - 421 * b;
+	int g = 4;
+	sum /= g+1;
+	sum *= 3-1;
+	sum = sum * sum;
+	return sum;
+}

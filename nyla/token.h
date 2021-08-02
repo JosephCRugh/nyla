@@ -1,6 +1,7 @@
 #pragma once
 
 #include "name.h"
+#include <string>
 
 namespace nyla {
 
@@ -47,10 +48,17 @@ namespace nyla {
 
 		// === Symbols === \\
 
+		TK_PLUS_EQ,
+		TK_MINUS_EQ,
+		TK_DIV_EQ,
+		TK_MUL_EQ,
+
 		// === Other === \\
 
 		TK_EOF
 	};
+
+	std::string token_tag_to_string(u32 tag);
 
 	struct token {
 		u32 tag;
@@ -60,7 +68,7 @@ namespace nyla {
 		token(u32 _tag) : tag(_tag) {}
 
 		friend std::ostream& operator<<(std::ostream& os, const nyla::token* token) {
-			token->print(os);
+			os << "(" << token->to_string() << ")";
 			return os;
 		}
 	
@@ -68,7 +76,7 @@ namespace nyla {
 			return equals(o);
 		}
 
-		virtual void print(std::ostream& os) const = 0;
+		virtual std::string to_string() const = 0;
 
 		virtual bool equals(const nyla::token& o) const = 0;
 
@@ -80,16 +88,8 @@ namespace nyla {
 
 		default_token(u32 _tag) : token(_tag) {}
 
-		void print(std::ostream& os) const override {
-			switch (tag) {
-			case TK_UNKNOWN: os << "(Unknown)"; break;
-			default:
-				if (tag < TK_UNKNOWN) {
-					os << (c8)tag;
-				}
-				
-				break;
-			}
+		virtual std::string to_string() const override {
+			return nyla::token_tag_to_string(tag);
 		}
 
 		bool equals(const nyla::token& o) const override {
@@ -106,8 +106,8 @@ namespace nyla {
 		word_token(u32 _tag) : token(_tag) {}
 		word_token(u32 _tag, nyla::name _name) : token(_tag), name(_name) {}
 
-		void print(std::ostream& os) const override {
-			os << "(" << name << ")";
+		virtual std::string to_string() const override {
+			return name.c_str();
 		}
 
 		bool equals(const nyla::token& o) const override {
@@ -144,12 +144,12 @@ namespace nyla {
 			return tok;
 		}
 
-		void print(std::ostream& os) const override {
+		virtual std::string to_string() const override {
 			switch (tag) {
-			case TK_VALUE_INT:    os << "(" << value_int << ")"; break;
-			case TK_VALUE_FLOAT:  os << "(" << value_float << ")"; break;
-			case TK_VALUE_DOUBLE: os << "(" << value_double << ")"; break;
-			default: break;
+			case TK_VALUE_INT:    return std::to_string(value_int);
+			case TK_VALUE_FLOAT:  return std::to_string(value_float);
+			case TK_VALUE_DOUBLE: return std::to_string(value_double);
+			default: return "";
 			}
 		}
 

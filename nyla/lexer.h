@@ -20,9 +20,13 @@ namespace nyla {
 		/// </summary>
 		nyla::token* next_token();
 
+		u32 get_line_num() { return m_line_num; }
+
 	private:
 
 		void consume_ignored();
+
+		void on_new_line();
 
 		nyla::word_token* next_word();
 
@@ -37,5 +41,6 @@ namespace nyla {
 		std::tuple<u32, u32> read_unsigned_digits();
 
 		nyla::reader m_reader;
+		u32          m_line_num = 1;
 	};
 }

@@ -32,11 +32,15 @@ bool nyla::for_files(const std::wstring& path, std::function<void(std::string)> 
 	return true;
 }
 
-void nyla::read_file(const std::string& fpath, c8*& data) {
-	std::ifstream in(fpath);
+bool nyla::read_file(const std::string& fpath, c8*& data, ulen& size) {
+	std::ifstream in(fpath, std::ios::binary | std::ios::in);
+	if (!in.good()) {
+		return false;
+	}
 	in.seekg(0, std::ios::end);
-	ulen size = in.tellg();
+	size = in.tellg();
 	data = new c8[size];
-	in.seekg(0);
+	in.seekg(0, std::ios::beg);
 	in.read(data, size);
+	return true;
 }

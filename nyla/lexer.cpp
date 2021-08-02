@@ -1,6 +1,8 @@
 #include "lexer.h"
+#include "log.h"
 
 #include <unordered_map>
+#include <assert.h>
 
 using namespace nyla;
 
@@ -21,7 +23,7 @@ constexpr bool identifier_set[256] = {
 
 constexpr bool whitespace_set[256] = {             
 		0,0,0,0,0, 0,0,0,1,1,  // 0-9
-		1,1,1,1,0, 0,0,0,0,0,  // 10-19
+		0,1,1,0,0, 0,0,0,0,0,  // 10-19
 		0,0,0,0,0, 0,0,0,0,0,  // 20-29
 		0,0,1,0,0, 0,0,0,0,0,  // 30-39
 };
@@ -40,6 +42,11 @@ constexpr bool eof_eol_set[256] = {
 	1,   0,0,0, 0,0,0,0, 0,0,  1,  0,
 //    '\r'
 	0, 1
+};
+
+constexpr bool eol_set[256] = {
+	0,0,0,0, 0,0,0,0, 0,0,1,0,
+    0,1
 };
 
 std::unordered_map<nyla::name, nyla::token_tag,
@@ -74,8 +81,52 @@ lexer::lexer(nyla::reader& reader) : m_reader(reader) {
 	
 }
 
+void nyla::lexer::consume_ignored() {
+	bool continue_eating = false;
+	do {
+		// Eating newlines
+		while (eol_set[m_reader.cur_char()]) {
+			switch (m_reader.cur_char()) {
+			case '\n':
+				m_reader.next_char(); // consuming '\n'
+				on_new_line();
+				break;
+			case '\r':
+				m_reader.next_char(); // consuming '\r'
+				if (m_reader.cur_char() == '\n')
+					m_reader.next_char(); // consuming '\n' 
+				on_new_line();
+				break;
+			default:
+				assert(!"Unreachable!");
+				break;
+			}
+		}
+		// Eating whitespace
+		c8 ch = m_reader.cur_char();
+		while (whitespace_set[ch])
+			ch = m_reader.next_char();
+		// Eating single line comments
+		if (ch == '`' && m_reader.peek_char() == '`') {
+			m_reader.next_char(); // Consuming `
+			m_reader.next_char(); // Consuming `
+			ch = m_reader.cur_char();
+			while (!eof_eol_set[ch])
+				ch = m_reader.next_char();
+		}
+		continue_eating = whitespace_set[ch]                       ||
+			              ch == '`' && m_reader.peek_char() == '`' ||
+			              eol_set[m_reader.cur_char()];
+	} while (continue_eating);
+}
+
+void lexer::on_new_line() {
+	++m_line_num;
+}
+
 nyla::token* lexer::next_token() {
 	consume_ignored();
+	assert(!whitespace_set[m_reader.cur_char()] && "Character in whitespace_set not consumed.");
 	switch (m_reader.cur_char()) {
 	case 'a': case 'b': case 'c': case 'd': case 'e':
 	case 'f': case 'g': case 'h': case 'i': case 'j':
@@ -99,10 +150,14 @@ nyla::token* lexer::next_token() {
 	case '(': case ')':
 	case '[': case ']':
 		return next_symbol();
-	case '\0':
+	case '\0': case EOF:
 		return new nyla::default_token(TK_EOF);
+	default: {
+		g_log->error(ERR_UNKNOWN_CHAR, m_line_num, error_data::make_char_load(m_reader.cur_char()));
+		m_reader.next_char(); // Reading the unknown character.
+		return new nyla::default_token(TK_UNKNOWN);
 	}
-	return nullptr;
+	}
 }
 
 nyla::word_token* lexer::next_word() {
@@ -131,6 +186,38 @@ nyla::word_token* lexer::next_word() {
 nyla::token* lexer::next_symbol() {
 	c8 ch = m_reader.cur_char();
 	switch (ch) {
+	case '+': {
+		ch = m_reader.next_char(); // consuming +
+		if (ch == '=') {
+			m_reader.next_char(); // consuming =
+			return new nyla::default_token(TK_PLUS_EQ);
+		}
+		return new nyla::default_token('+');
+	}
+	case '-': {
+		ch = m_reader.next_char(); // consuming -
+		if (ch == '=') {
+			m_reader.next_char(); // consuming =
+			return new nyla::default_token(TK_MINUS_EQ);
+		}
+		return new nyla::default_token('-');
+	}
+	case '/': {
+		ch = m_reader.next_char(); // consuming /
+		if (ch == '=') {
+			m_reader.next_char(); // consuming =
+			return new nyla::default_token(TK_DIV_EQ);
+		}
+		return new nyla::default_token('/');
+	}
+	case '*': {
+		ch = m_reader.next_char(); // consuming *
+		if (ch == '=') {
+			m_reader.next_char(); // consuming =
+			return new nyla::default_token(TK_MUL_EQ);
+		}
+		return new nyla::default_token('*');
+	}
 	default:
 		nyla::token* symbol_token = new nyla::default_token(ch);
 		m_reader.next_char(); // Consuming the symbol.
@@ -163,12 +250,13 @@ u64 lexer::calculate_int_value(const std::tuple<u32, u32>& digits)
 {
 	u64 int_value = 0;
 	u64 prev_value = -1;
+	bool too_large = false;
 	for (ulen index = std::get<0>(digits); index < std::get<1>(digits); index++) {
 		prev_value = int_value;
 		int_value *= 10;
 		int_value += (u64)((u64)m_reader[index] - '0');
 		if (int_value < prev_value) {
-			// TODO: error too large
+			too_large = true;
 			break;
 		} else if (int_value == 0xFF'FF'FF'FF'FF'FF'FF'FF) {
 			// Possible overflow unless the numeric value fits exactly.
@@ -178,10 +266,15 @@ u64 lexer::calculate_int_value(const std::tuple<u32, u32>& digits)
 			if (!(prev_value == 1844674407370955161 &&
 				m_reader[index] == '5'
 				)) {
-				// TODO: error too large
+				too_large = true;
 				break;
 			}
 		}
+	}
+	
+	if (too_large) {
+		g_log->error(ERR_INT_TOO_LARGE, m_line_num,
+			     error_data::make_str_literal_load(m_reader.from_range(digits).c_str()));
 	}
 
 	return int_value;
@@ -190,24 +283,4 @@ u64 lexer::calculate_int_value(const std::tuple<u32, u32>& digits)
 nyla::num_token* lexer::next_number() {
 	std::tuple<u32, u32> digits_before_dot = read_unsigned_digits();
 	return next_integer(digits_before_dot);
-}
-
-void nyla::lexer::consume_ignored() {
-	bool continue_eating = false;
-	do {
-		// Eating whitespace
-		c8 ch = m_reader.cur_char();
-		while (whitespace_set[ch])
-			ch = m_reader.next_char();
-		// Eating single line comments
-		if (ch == '`' && m_reader.peek_char() == '`') {
-			m_reader.next_char(); // Consuming `
-			m_reader.next_char(); // Consuming `
-			ch = m_reader.cur_char();
-			while (!eof_eol_set[ch])
-				ch = m_reader.next_char();
-		}
-		continue_eating = whitespace_set[ch] ||
-			              ch == '`' && m_reader.peek_char() == '`';
-	} while (continue_eating);
 }

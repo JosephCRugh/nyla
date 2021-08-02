@@ -9,20 +9,20 @@
 #define test_half_header_length (test_header_length >> 1)
 
 void print_check_heading(const char* msg) {
-	test_set_color(test_color_yellow);
+	set_console_color(test_color_yellow);
 	std::cout << msg;
-	test_set_color(test_color_default);
+	set_console_color(test_color_default);
 }
 
 void print_success_state(bool tof) {
 	if (tof) {
-		test_set_color(test_color_green);
+		set_console_color(test_color_green);
 		std::cout << " (OK)";
 	} else {
-		test_set_color(test_color_red);
+		set_console_color(test_color_red);
 		std::cout << " (FAIL)";
 	}
-	test_set_color(test_color_default);
+	set_console_color(test_color_default);
 }
 
 template<typename T, typename V>

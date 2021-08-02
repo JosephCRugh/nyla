@@ -5,4 +5,4 @@
 #define test_color_green   0x2
 #define test_color_yellow  0x6
 
-void test_set_color(int color);
+void set_console_color(int color);

@@ -1,7 +1,7 @@
 #include "tests.h"
 
 #include "files_util.h"
-
+#include "log.h"
 #include "parser.h"
 #include "test_suite.h"
 #include "gen_llvm.h"
@@ -26,7 +26,7 @@ void run_lexer_tests() {
 		nyla::lexer lexer(reader);
 		check_eq(lexer.next_token(), new nyla::word_token(nyla::TK_IDENTIFIER, nyla::name::make("var")));
 		check_eq(lexer.next_token(), new nyla::word_token(nyla::TK_IDENTIFIER, nyla::name::make("my_var5")));
-		check_eq(lexer.next_token(), new nyla::word_token(nyla::TK_IDENTIFIER, nyla::name::make("gg")));		
+		check_eq(lexer.next_token(), new nyla::word_token(nyla::TK_IDENTIFIER, nyla::name::make("gg")));	
 	}
 	{
 		nyla::reader reader("void byte short int long float double");
@@ -50,6 +50,34 @@ void run_lexer_tests() {
 		check_eq(lexer.next_token(), nyla::get_reserved_word_token("for"));
 		check_eq(lexer.next_token(), nyla::get_reserved_word_token("while"));
 	}
+	{
+		nyla::reader reader("+ - / * = ; () {} <> += -= /= *=");
+		nyla::lexer lexer(reader);
+		check_eq(lexer.next_token(), new nyla::default_token('+'));
+		check_eq(lexer.next_token(), new nyla::default_token('-'));
+		check_eq(lexer.next_token(), new nyla::default_token('/'));
+		check_eq(lexer.next_token(), new nyla::default_token('*'));
+		check_eq(lexer.next_token(), new nyla::default_token('='));
+		check_eq(lexer.next_token(), new nyla::default_token(';'));
+		check_eq(lexer.next_token(), new nyla::default_token('('));
+		check_eq(lexer.next_token(), new nyla::default_token(')'));
+		check_eq(lexer.next_token(), new nyla::default_token('{'));
+		check_eq(lexer.next_token(), new nyla::default_token('}'));
+		check_eq(lexer.next_token(), new nyla::default_token('<'));
+		check_eq(lexer.next_token(), new nyla::default_token('>'));
+		check_eq(lexer.next_token(), new nyla::default_token(nyla::TK_PLUS_EQ));
+		check_eq(lexer.next_token(), new nyla::default_token(nyla::TK_MINUS_EQ));
+		check_eq(lexer.next_token(), new nyla::default_token(nyla::TK_DIV_EQ));
+		check_eq(lexer.next_token(), new nyla::default_token(nyla::TK_MUL_EQ));
+	}
+	nyla::g_log->set_should_print(false);
+	{
+		nyla::reader reader("24346345142135325124342356235");
+		nyla::lexer lexer(reader);
+		lexer.next_token();
+		check_eq(nyla::ERR_INT_TOO_LARGE, nyla::g_log->last_err_and_reset(), "Too large error");
+	}
+	nyla::g_log->set_should_print(true);
 }
 
 #define parser_setup(text) \
@@ -86,20 +114,39 @@ void run_parser_tests() {
 	function_decl_test("int gg_2(short aa)", nyla::TYPE_INT, "gg_2",
 		{ nyla::TYPE_SHORT },
 		{ "aa" });
-	function_decl_test("float r___g(int y1, int x, byte t4)",
+	function_decl_test("float r___g(int y1, int x, byte t4)", 
 		nyla::TYPE_FLOAT, "r___g",
 		{ nyla::TYPE_INT, nyla::TYPE_INT, nyla::TYPE_BYTE },
 		{ "y1", "x", "t4" });
+
 }
 
 
 
 std::unordered_map<std::string, int> program_err_codes = {
 	{ "a.nyla", 55 + 88 },
-	{ "simple_memory.nyla", 5+44 }
+	{ "simple_memory.nyla", 5+44 },
+	{ "loop_sum.nyla", [](){
+			int total = 0;
+			for (int i = 0; i < 55; i++) {
+				total += i;
+			}
+			return total;
+		}() },
+	{ "arithmetic.nyla", [](){
+				int b = 22;
+				int sum = 44 * 3 + 55 - 421 * b;
+				int g = 4;
+				sum /= g + 1;
+				sum *= 3 - 1;
+				sum = sum * sum;
+				return sum;
+			}()  },
 };
 
 void run_llvm_gen_tests() {
+
+	test("LLVM Code-Gen Tests");
 
 	nyla::init_native_target();
 
@@ -107,20 +154,27 @@ void run_llvm_gen_tests() {
 		// TODO make sure they are .nyla files
 
 		c8* buffer;
-		nyla::read_file("resources/" + fpath, buffer);
-		parser_setup(buffer);
-			nyla::working_llvm_module = new llvm::Module("My Module", *nyla::llvm_context);
+		ulen buffer_size;
+		nyla::read_file("resources/" + fpath, buffer, buffer_size);
+		nyla::reader reader(buffer, buffer_size);
+		nyla::lexer lexer(reader);
+		nyla::sym_table sym_table;
+		nyla::parser parser(lexer, sym_table);
+		
+		nyla::working_llvm_module = new llvm::Module("My Module", *nyla::llvm_context);
 		nyla::llvm_generator generator;
-		llvm::Function* function = generator.gen_function(parser.parse_function());
+		nyla::afunction* nfunction = parser.parse_function();
+		std::cout << nfunction << std::endl;
+		llvm::Function* function = generator.gen_function(nfunction);
 		function->print(llvm::errs());
 		std::string out_path = fpath.substr(0, fpath.size()-5).append(".o");
 		nyla::write_obj_file(out_path.c_str());
 
-		system((std::string("clang++ -O0 ") + out_path + " -o program.exe").c_str());
-		int err_code = system("program.exe");
-		
 		auto it = program_err_codes.find(fpath);
 		if (it != program_err_codes.end()) {
+			system((std::string("clang++ -O0 ") + out_path + " -o program.exe").c_str());
+			int err_code = system("program.exe");
+			
 			check_eq(err_code, it->second, "Error code check");
 		}
 
