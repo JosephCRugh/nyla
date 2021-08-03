@@ -1,18 +1,27 @@
 #pragma once
 
 #include "types_ext.h"
+#include "type.h"
 
 namespace nyla {
 
 	enum error_tag {
 		ERR_NO_ERROR,
+		// Lexer errors
 		ERR_UNKNOWN_CHAR,
+		
+		// Parser before analysis errors
 		ERR_INT_TOO_LARGE,
 		ERR_EXPECTED_TOKEN,
 		ERR_CANNOT_RESOLVE_TYPE,
 		ERR_EXPECTED_IDENTIFIER,
 		ERR_EXPECTED_STMT,
-		ERR_EXPECTED_FACTOR
+		ERR_EXPECTED_FACTOR,
+		
+		// Analysis errors
+		ERR_SHOULD_RETURN_VALUE,
+		ERR_RETURN_TYPE_MISMATCH,
+		ERR_CANNOT_ASSIGN
 	};
 
 	struct error_data {
@@ -52,6 +61,18 @@ namespace nyla {
 		}
 		u32 expected_tag;
 		u32 found_tag;
+	};
+
+	struct type_mismatch_data : public error_data {
+		virtual ~type_mismatch_data() {}
+		static type_mismatch_data* make_type_mismatch(nyla::type* expected_type, nyla::type* found_type) {
+			type_mismatch_data* data = new type_mismatch_data;
+			data->expected_type = expected_type;
+			data->found_type    = found_type;
+			return data;
+		}
+		nyla::type* expected_type;
+		nyla::type* found_type;
 	};
 
 	class log {

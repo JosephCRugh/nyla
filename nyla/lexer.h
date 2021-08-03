@@ -24,6 +24,13 @@ namespace nyla {
 
 	private:
 
+		template<typename token_type>
+		token_type* make_token(u32 tag) {
+			token_type* token = new token_type(tag);
+			token->line_num = m_line_num;
+			return token;
+		}
+
 		void consume_ignored();
 
 		void on_new_line();
@@ -34,9 +41,16 @@ namespace nyla {
 
 		nyla::num_token* next_number();
 
+		nyla::num_token* next_float(const std::tuple<u32, u32>& digits_before_dot);
+
 		nyla::num_token* next_integer(const std::tuple<u32, u32>& digits_before_dot);
 
 		u64 calculate_int_value(const std::tuple<u32, u32>& digits);
+
+		double calculate_float(const std::tuple<u32, u32>& digits_before_dot,
+			                   const std::tuple<u32, u32>& fraction_digits,
+			                   const std::tuple<u32, u32>& exponent_digits,
+			                   c8 exponent_sign);
 
 		std::tuple<u32, u32> read_unsigned_digits();
 

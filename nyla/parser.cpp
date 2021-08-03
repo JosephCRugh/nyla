@@ -16,7 +16,7 @@ nyla::afunction* parser::parse_function_decl() {
 	// TODO: parse function modifiers (public, private access, ect..)
 	nyla::type* return_type = parse_type();
 
-	nyla::afunction* function = nyla::make_node<nyla::afunction>(AST_FUNCTION);
+	nyla::afunction* function = make_node<nyla::afunction>(AST_FUNCTION, m_current);
 	function->return_type = return_type;
 	function->name        = parse_identifier();
 	
@@ -42,15 +42,10 @@ nyla::afunction* parser::parse_function_decl() {
 
 nyla::afunction* nyla::parser::parse_function() {
 	nyla::afunction* function = parse_function_decl();
-	function->scope = m_sym_table.push_scope();
-	match('{');
 	m_found_ret = false;
-	while (m_current->tag != '}' && m_current->tag != '\0') {
-		function->scope->stmts.push_back(parse_function_stmt());
-	}
-	match('}');
+	function->scope = parse_scope(false);
 	if (!m_found_ret && function->return_type->tag == TYPE_VOID) {
-		nyla::areturn* void_ret = nyla::make_node<nyla::areturn>(AST_RETURN);
+		nyla::areturn* void_ret = make_node<nyla::areturn>(AST_RETURN, m_current);
 		function->scope->stmts.push_back(void_ret);
 	}
 	m_sym_table.pop_scope();
@@ -58,22 +53,22 @@ nyla::afunction* nyla::parser::parse_function() {
 }
 
 nyla::type* parser::parse_type() {
-	type_tag elem_tag = type_tag::ERROR;
+	nyla::type* type = nyla::type::get_error();
 	switch (m_current->tag) {
-	case TK_TYPE_BYTE:   elem_tag = TYPE_BYTE;   next_token(); break;
-	case TK_TYPE_SHORT:  elem_tag = TYPE_SHORT;  next_token(); break;
-	case TK_TYPE_INT:    elem_tag = TYPE_INT;    next_token(); break;
-	case TK_TYPE_LONG:   elem_tag = TYPE_LONG;   next_token(); break;
-	case TK_TYPE_FLOAT:  elem_tag = TYPE_FLOAT;  next_token(); break;
-	case TK_TYPE_DOUBLE: elem_tag = TYPE_DOUBLE; next_token(); break;
-	case TK_TYPE_BOOL:   elem_tag = TYPE_BOOL;   next_token(); break;
-	case TK_TYPE_VOID:   elem_tag = TYPE_VOID;   next_token(); break;
+	case TK_TYPE_BYTE:   type = nyla::type::get_byte();   next_token(); break;
+	case TK_TYPE_SHORT:  type = nyla::type::get_short();  next_token(); break;
+	case TK_TYPE_INT:    type = nyla::type::get_int();    next_token(); break;
+	case TK_TYPE_LONG:   type = nyla::type::get_long();   next_token(); break;
+	case TK_TYPE_FLOAT:  type = nyla::type::get_float();  next_token(); break;
+	case TK_TYPE_DOUBLE: type = nyla::type::get_double(); next_token(); break;
+	case TK_TYPE_BOOL:   type = nyla::type::get_bool();   next_token(); break;
+	case TK_TYPE_VOID:   type = nyla::type::get_void();   next_token(); break;
 	default:
 		nyla::g_log->error(ERR_CANNOT_RESOLVE_TYPE, m_lexer.get_line_num(),
 			error_data::make_str_literal_load(m_current->to_string().c_str()));
 		break;
 	}
-	return new type(elem_tag);
+	return type;
 }
 
 nyla::name parser::parse_identifier() {
@@ -88,17 +83,30 @@ nyla::name parser::parse_identifier() {
 	return nyla::name();
 }
 
+nyla::ascope* nyla::parser::parse_scope(bool pop_scope) {
+	nyla::ascope* scope = m_sym_table.push_scope(m_current);
+	match('{');
+	while (m_current->tag != '}' && m_current->tag != '\0') {
+		scope->stmts.push_back(parse_function_stmt());
+	}
+	match('}');
+	if (pop_scope) {
+		m_sym_table.pop_scope();
+	}
+	return scope;
+}
+
 nyla::avariable_decl* nyla::parser::parse_variable_decl() {
 	return parse_variable_decl(parse_type());
 }
 
 nyla::avariable_decl* nyla::parser::parse_variable_decl(nyla::type* type) {
 	nyla::avariable* variable =
-		nyla::make_node<nyla::avariable>(AST_VARIABLE);
-	variable->type = type;
+		make_node<nyla::avariable>(AST_VARIABLE, m_current);
+	variable->checked_type = type;
 	variable->name = parse_identifier();
 	nyla::avariable_decl* variable_delc =
-		nyla::make_node<nyla::avariable_decl>(AST_VARIABLE_DECL);
+		make_node<nyla::avariable_decl>(AST_VARIABLE_DECL, m_current);
 	variable_delc->variable = variable;
 	return variable_delc;
 }
@@ -123,8 +131,8 @@ std::vector<avariable_decl*> nyla::parser::parse_variable_assign_list() {
 nyla::aexpr* parser::parse_function_stmt() {
 	switch (m_current->tag) {
 	case TK_RETURN: {
+		nyla::areturn* ret = make_node<nyla::areturn>(AST_RETURN, m_current);
 		next_token(); // Consuming return token.
-		nyla::areturn* ret = nyla::make_node<nyla::areturn>(AST_RETURN);
 		m_found_ret = true;
 		if (m_current->tag == ';') {
 			match_semis();
@@ -181,8 +189,8 @@ nyla::aexpr* parser::parse_function_stmt() {
 }
 
 nyla::aexpr* nyla::parser::parse_for_loop() {
+	nyla::afor_loop* loop = make_node<nyla::afor_loop>(AST_FOR_LOOP, m_current);
 	next_token(); // Consuming for token.
-	nyla::afor_loop* loop = nyla::make_node<nyla::afor_loop>(AST_FOR_LOOP);
 	if (m_current->tag != ';') {
 		loop->declarations = parse_variable_assign_list();
 	}
@@ -190,11 +198,7 @@ nyla::aexpr* nyla::parser::parse_for_loop() {
 	loop->cond = parse_expression();
 	match(';');
 	loop->post = parse_expression();
-	match('{');
-	while (m_current->tag != '}' && m_current->tag != '\0') {
-		loop->body.push_back(parse_function_stmt());
-	}
-	match('}');
+	loop->scope = parse_scope();
 	return loop;
 }
 
@@ -222,10 +226,34 @@ std::unordered_map<u32, u32> precedence = {
 nyla::aexpr* nyla::parser::parse_factor() {
 	switch (m_current->tag) {
 	case TK_VALUE_INT: {
-		nyla::anumber* number = nyla::make_node<nyla::anumber>(AST_VALUE_INT);
+		nyla::anumber* number = make_node<nyla::anumber>(AST_VALUE_INT, m_current);
 		number->value_int = dynamic_cast<nyla::num_token*>(m_current)->value_int;
 		next_token(); // Consuming the number token.
 		return number;
+	}
+	case TK_VALUE_FLOAT: {
+		nyla::anumber* number = make_node<nyla::anumber>(AST_VALUE_FLOAT, m_current);
+		number->value_float = dynamic_cast<nyla::num_token*>(m_current)->value_float;
+		next_token(); // Consuming the number token.
+		return number;
+	}
+	case TK_VALUE_DOUBLE: {
+		nyla::anumber* number = make_node<nyla::anumber>(AST_VALUE_DOUBLE, m_current);
+		number->value_double = dynamic_cast<nyla::num_token*>(m_current)->value_double;
+		next_token(); // Consuming the number token.
+		return number;
+	}
+	case TK_TYPE_BYTE:  case TK_TYPE_SHORT:
+	case TK_TYPE_INT:   case TK_TYPE_LONG:
+	case TK_TYPE_FLOAT: case TK_TYPE_DOUBLE:
+	case TK_TYPE_BOOL:  case TK_TYPE_VOID: {
+		// Type casting
+		nyla::atype_cast* type_cast = make_node<nyla::atype_cast>(AST_TYPE_CAST, m_current);
+		type_cast->checked_type = parse_type();
+		match('(');
+		type_cast->value = parse_expression();
+		match(')');
+		return type_cast;
 	}
 	case TK_IDENTIFIER: {
 		nyla::name name = parse_identifier();
@@ -239,7 +267,7 @@ nyla::aexpr* nyla::parser::parse_factor() {
 		default:
 			break;
 		}
-		nyla::avariable* variable = nyla::make_node<nyla::avariable>(AST_VARIABLE);
+		nyla::avariable* variable = make_node<nyla::avariable>(AST_VARIABLE, m_current);
 		variable->name = name;
 		// The type is determined during symantic analysis.
 		return variable;
@@ -253,11 +281,12 @@ nyla::aexpr* nyla::parser::parse_factor() {
 	}
 }
 
-nyla::aexpr* parser::on_binary_op(u32 op, nyla::aexpr* lhs, nyla::aexpr* rhs) {
+nyla::aexpr* parser::on_binary_op(nyla::token* op_token,
+	                              nyla::aexpr* lhs, nyla::aexpr* rhs) {
 	// Subdivides an equal + operator into seperate nodes.
-	static auto equal_and_op_apply = [](u32 op, nyla::aexpr* lhs, nyla::aexpr* rhs) -> nyla::abinary_op* {
-		nyla::abinary_op* eq_op = nyla::make_node<nyla::abinary_op>(AST_BINARY_OP);
-		nyla::abinary_op* op_op = nyla::make_node<nyla::abinary_op>(AST_BINARY_OP);
+	static auto equal_and_op_apply = [this, op_token](u32 op, nyla::aexpr* lhs, nyla::aexpr* rhs) -> nyla::abinary_op* {
+		nyla::abinary_op* eq_op = make_node<nyla::abinary_op>(AST_BINARY_OP, op_token);
+		nyla::abinary_op* op_op = make_node<nyla::abinary_op>(AST_BINARY_OP, op_token);
 		eq_op->op  = '=';
 		op_op->op  = op;
 		op_op->lhs = lhs;
@@ -266,7 +295,7 @@ nyla::aexpr* parser::on_binary_op(u32 op, nyla::aexpr* lhs, nyla::aexpr* rhs) {
 		eq_op->rhs = op_op;
 		return eq_op;
 	};
-	switch (op) {
+	switch (op_token->tag) {
 	case TK_PLUS_EQ:  return equal_and_op_apply('+', lhs, rhs);
 	case TK_MINUS_EQ: return equal_and_op_apply('-', lhs, rhs);
 	case TK_DIV_EQ:   return equal_and_op_apply('/', lhs, rhs);
@@ -274,10 +303,10 @@ nyla::aexpr* parser::on_binary_op(u32 op, nyla::aexpr* lhs, nyla::aexpr* rhs) {
 	default: {
 		// Letting folding occure via LLVM folding operation. Could handle it here
 		// which may result in faster compilation.
-		nyla::abinary_op* binary_op = nyla::make_node<nyla::abinary_op>(AST_BINARY_OP);
+		nyla::abinary_op* binary_op = make_node<nyla::abinary_op>(AST_BINARY_OP, op_token);
 		binary_op->lhs = lhs;
 		binary_op->rhs = rhs;
-		binary_op->op = op;
+		binary_op->op = op_token->tag;
 		return binary_op;
 	}
 	}
@@ -293,7 +322,7 @@ nyla::aexpr* parser::parse_expression(nyla::aexpr* lhs) {
 	nyla::token* next_op;
 
 	struct stack_unit {
-		u32          op;  // operator kind
+		nyla::token* op;
 		nyla::aexpr* expr;
 	};
 	std::stack<stack_unit> op_stack;
@@ -308,21 +337,21 @@ nyla::aexpr* parser::parse_expression(nyla::aexpr* lhs) {
 		if (more_operators && precedence[next_op->tag] > precedence[op->tag]) {
 			// Delaying the operation until later since the next operator has a
 			// higher precedence.
-			stack_unit unit = { op->tag, lhs };
+			stack_unit unit = { op, lhs };
 			op_stack.push(unit);
 			lhs = rhs;
 			op  = next_op;
 
 		} else {
 			// Apply the binary operator!
-			nyla::aexpr* res = on_binary_op(op->tag, lhs, rhs);
+			nyla::aexpr* res = on_binary_op(op, lhs, rhs);
 			lhs = res;
 
 			while (!op_stack.empty()) {
 				rhs = lhs;
 				stack_unit unit = op_stack.top();
 				// Still possible to have the right side have higher precedence.
-				if (more_operators && precedence[next_op->tag] > precedence[unit.op]) {
+				if (more_operators && precedence[next_op->tag] > precedence[unit.op->tag]) {
 					lhs = rhs;
 					op  = next_op;
 					break;

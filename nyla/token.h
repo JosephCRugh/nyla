@@ -62,6 +62,7 @@ namespace nyla {
 
 	struct token {
 		u32 tag;
+		u32 line_num;
 		
 		virtual ~token() {}
 

@@ -5,6 +5,7 @@
 #include "parser.h"
 #include "test_suite.h"
 #include "gen_llvm.h"
+#include "analysis.h"
 #include <assert.h>
 #include <fstream>
 #include <unordered_map>
@@ -70,6 +71,14 @@ void run_lexer_tests() {
 		check_eq(lexer.next_token(), new nyla::default_token(nyla::TK_DIV_EQ));
 		check_eq(lexer.next_token(), new nyla::default_token(nyla::TK_MUL_EQ));
 	}
+	{
+		nyla::reader reader("1323   123.02   124.412E+3  123.2E-2");
+		nyla::lexer lexer(reader);
+		check_eq(lexer.next_token(), nyla::num_token::make_int(1323));
+		check_eq(lexer.next_token(), nyla::num_token::make_double(123.02));
+		check_eq(lexer.next_token(), nyla::num_token::make_double(124.412E+3));
+		check_eq(lexer.next_token(), nyla::num_token::make_double(123.2E-2));
+	}
 	nyla::g_log->set_should_print(false);
 	{
 		nyla::reader reader("24346345142135325124342356235");
@@ -101,7 +110,7 @@ void function_decl_test(c_string text, nyla::type_tag return_type,
 	if (function->parameters.size() == param_types.size()) {
 		for (u32 i = 0; i < function->parameters.size(); i++) {
 			check_eq(function->parameters[i]->variable->name, nyla::name::make(param_names[i]), "Parameter Name Check");
-			check_eq(function->parameters[i]->variable->type->tag, param_types[i], "Parameter Type Check");
+			check_eq(function->parameters[i]->variable->checked_type->tag, param_types[i], "Parameter Type Check");
 		}
 	}
 	std::cout << "---------------------------" << std::endl;
@@ -120,8 +129,6 @@ void run_parser_tests() {
 		{ "y1", "x", "t4" });
 
 }
-
-
 
 std::unordered_map<std::string, int> program_err_codes = {
 	{ "a.nyla", 55 + 88 },
@@ -150,7 +157,9 @@ void run_llvm_gen_tests() {
 
 	nyla::init_native_target();
 
-	nyla::for_files(L"resources/*", [](const std::string& fpath) {
+	nyla::log* l = nyla::g_log;
+
+	nyla::for_files(L"resources/*", [&l](const std::string& fpath) {
 		// TODO make sure they are .nyla files
 
 		c8* buffer;
@@ -160,10 +169,17 @@ void run_llvm_gen_tests() {
 		nyla::lexer lexer(reader);
 		nyla::sym_table sym_table;
 		nyla::parser parser(lexer, sym_table);
-		
+		nyla::analysis analysis(sym_table);
+
 		nyla::working_llvm_module = new llvm::Module("My Module", *nyla::llvm_context);
 		nyla::llvm_generator generator;
 		nyla::afunction* nfunction = parser.parse_function();
+		analysis.type_check_function(nfunction);
+
+		if (l->get_num_errors() != 0) {
+			return;
+		}
+
 		std::cout << nfunction << std::endl;
 		llvm::Function* function = generator.gen_function(nfunction);
 		function->print(llvm::errs());

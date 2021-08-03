@@ -151,17 +151,17 @@ nyla::token* lexer::next_token() {
 	case '[': case ']':
 		return next_symbol();
 	case '\0': case EOF:
-		return new nyla::default_token(TK_EOF);
+		return make_token<nyla::default_token>(TK_EOF);
 	default: {
 		g_log->error(ERR_UNKNOWN_CHAR, m_line_num, error_data::make_char_load(m_reader.cur_char()));
 		m_reader.next_char(); // Reading the unknown character.
-		return new nyla::default_token(TK_UNKNOWN);
+		return make_token<nyla::default_token>(TK_UNKNOWN);
 	}
 	}
 }
 
 nyla::word_token* lexer::next_word() {
-	nyla::word_token* word_token = new nyla::word_token(TK_IDENTIFIER);
+	nyla::word_token* word_token = make_token<nyla::word_token>(TK_IDENTIFIER);
 	nyla::name name;
 	c8 ch = m_reader.cur_char();
 	while (identifier_set[ch]) {
@@ -190,36 +190,36 @@ nyla::token* lexer::next_symbol() {
 		ch = m_reader.next_char(); // consuming +
 		if (ch == '=') {
 			m_reader.next_char(); // consuming =
-			return new nyla::default_token(TK_PLUS_EQ);
+			return make_token<nyla::default_token>(TK_PLUS_EQ);
 		}
-		return new nyla::default_token('+');
+		return make_token<nyla::default_token>('+');
 	}
 	case '-': {
 		ch = m_reader.next_char(); // consuming -
 		if (ch == '=') {
 			m_reader.next_char(); // consuming =
-			return new nyla::default_token(TK_MINUS_EQ);
+			return make_token<nyla::default_token>(TK_MINUS_EQ);
 		}
-		return new nyla::default_token('-');
+		return make_token<nyla::default_token>('-');
 	}
 	case '/': {
 		ch = m_reader.next_char(); // consuming /
 		if (ch == '=') {
 			m_reader.next_char(); // consuming =
-			return new nyla::default_token(TK_DIV_EQ);
+			return make_token<nyla::default_token>(TK_DIV_EQ);
 		}
-		return new nyla::default_token('/');
+		return make_token<nyla::default_token>('/');
 	}
 	case '*': {
 		ch = m_reader.next_char(); // consuming *
 		if (ch == '=') {
 			m_reader.next_char(); // consuming =
-			return new nyla::default_token(TK_MUL_EQ);
+			return make_token<nyla::default_token>(TK_MUL_EQ);
 		}
-		return new nyla::default_token('*');
+		return make_token<nyla::default_token>('*');
 	}
 	default:
-		nyla::token* symbol_token = new nyla::default_token(ch);
+		nyla::token* symbol_token = make_token<nyla::default_token>(ch);
 		m_reader.next_char(); // Consuming the symbol.
 		return symbol_token;
 	}
@@ -280,7 +280,81 @@ u64 lexer::calculate_int_value(const std::tuple<u32, u32>& digits)
 	return int_value;
 }
 
+double nyla::lexer::calculate_float(const std::tuple<u32, u32>& digits_before_dot,
+	                                const std::tuple<u32, u32>& fraction_digits,
+	                                const std::tuple<u32, u32>& exponent_digits,
+	                                c8 exponent_sign) {
+	
+	s64 unsigned_expoenent_value = calculate_int_value(exponent_digits);
+
+	s64 exponent_value = calculate_int_value(exponent_digits);
+	if (exponent_sign == '-') {
+		exponent_value = -exponent_value;
+	}
+
+	u32 fraction_length = std::get<1>(fraction_digits) - std::get<0>(fraction_digits);
+	u32 whole_length = std::get<1>(digits_before_dot) - std::get<0>(digits_before_dot);
+	
+	// Since the whole digits and fraction digits
+	// will be processed as if they are after the
+	// decimal the value will have to be shifted back
+	// the amount of digits that were shifted past the decimal.
+	exponent_value -= fraction_length;
+	
+	u32 index = 0;
+	double value = 0.0;
+	while (index < whole_length) {
+		u32 i = (u32)m_reader[index + std::get<0>(digits_before_dot)];
+		value = 10.0 * value + (u32)(i - '0');
+		++index;
+	}
+	index = 0;
+	while (index < fraction_length) {
+		u32 i = (u32)m_reader[index + std::get<0>(fraction_digits)];
+		value = 10.0 * value + (u32)(i - '0');
+		++index;
+	}
+
+	if (exponent_value != 0) {
+		value *= pow(10.0, exponent_value);
+	}
+
+	return value;
+}
+
+nyla::num_token* nyla::lexer::next_float(const std::tuple<u32, u32>& digits_before_dot) {
+	m_reader.next_char(); // Consuming .
+	std::tuple<u32, u32> fraction_digits = read_unsigned_digits();
+	std::tuple<u32, u32> exponent_digits = { 0, 0 };
+	c8 exponent_sign = '+';
+
+	// Exponent symbol     4202.412E+34
+	if (m_reader.cur_char() == 'E') {
+		c8 possible_sign = m_reader.next_char();
+		if (possible_sign == '+' || possible_sign == '-') {
+			exponent_sign = possible_sign;
+			m_reader.next_char(); // Consuming + or -
+		}
+
+		exponent_digits = read_unsigned_digits();
+	}
+
+	double float_value = calculate_float(digits_before_dot, fraction_digits,
+		                                 exponent_digits, exponent_sign);
+
+	return nyla::num_token::make_double(float_value);
+}
+
 nyla::num_token* lexer::next_number() {
 	std::tuple<u32, u32> digits_before_dot = read_unsigned_digits();
-	return next_integer(digits_before_dot);
+
+	nyla::num_token* num_token = nullptr;
+	if (m_reader.cur_char() == '.') {
+		num_token = next_float(digits_before_dot);
+	} else {
+		num_token = next_integer(digits_before_dot);
+	}
+	num_token->line_num = m_line_num;
+	return num_token;
 }
+

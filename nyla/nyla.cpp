@@ -29,6 +29,6 @@ int main() {
 	run_llvm_gen_tests();
 
 	nyla::clean_llvm();
-
+	
 	return 0;
 }

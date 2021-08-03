@@ -72,7 +72,7 @@ llvm::Function* llvm_generator::gen_function(nyla::afunction* function) {
 
 	std::vector<llvm::Type*> ll_parameter_types;
 	for (nyla::avariable_decl* param : function->parameters) {
-		ll_parameter_types.push_back(gen_type(param->variable->type));
+		ll_parameter_types.push_back(gen_type(param->variable->checked_type));
 	}
 
 	bool is_var_args = false;
@@ -129,13 +129,15 @@ llvm::Type* llvm_generator::gen_type(nyla::type* type) {
 	return nullptr;
 }
 
-llvm::Value* nyla::llvm_generator::gen_expression(nyla::aexpr* expr) {
+llvm::Value* llvm_generator::gen_expression(nyla::aexpr* expr) {
 	switch (expr->tag) {
 	case AST_RETURN:
 		return gen_return(dynamic_cast<nyla::areturn*>(expr));
 	case AST_VARIABLE_DECL:
 		return gen_variable_decl(dynamic_cast<nyla::avariable_decl*>(expr));
 	case AST_VALUE_INT:
+	case AST_VALUE_FLOAT:
+	case AST_VALUE_DOUBLE:
 		return gen_number(dynamic_cast<nyla::anumber*>(expr));
 	case AST_BINARY_OP:
 		return gen_binary_op(dynamic_cast<nyla::abinary_op*>(expr));
@@ -143,6 +145,8 @@ llvm::Value* nyla::llvm_generator::gen_expression(nyla::aexpr* expr) {
 		return gen_variable(dynamic_cast<nyla::avariable*>(expr));
 	case AST_FOR_LOOP:
 		return gen_for_loop(dynamic_cast<nyla::afor_loop*>(expr));
+	case AST_TYPE_CAST:
+		return gen_type_cast(dynamic_cast<nyla::atype_cast*>(expr));
 	}
 	return nullptr;
 }
@@ -156,11 +160,15 @@ llvm::Value* llvm_generator::gen_return(nyla::areturn* ret) {
 	return nyla::llvm_builder->CreateRet(gen_expression(ret->value));
 }
 
-llvm::Value* nyla::llvm_generator::gen_number(nyla::anumber* number) {
+llvm::Value* llvm_generator::gen_number(nyla::anumber* number) {
 	switch (number->tag) {
 	case AST_VALUE_INT:
 		return llvm::ConstantInt::get(
 			llvm::IntegerType::getInt32Ty(*nyla::llvm_context), number->value_int, true);
+	case AST_VALUE_FLOAT:
+		return llvm::ConstantFP::get(*nyla::llvm_context, llvm::APFloat(number->value_float));
+	case AST_VALUE_DOUBLE:
+		return llvm::ConstantFP::get(*nyla::llvm_context, llvm::APFloat(number->value_double));
 	}
 	return nullptr;
 }
@@ -181,22 +189,34 @@ llvm::Value* llvm_generator::gen_binary_op(nyla::abinary_op* binary_op) {
 	case '+': {
 		llvm::Value* ll_lhs = gen_expression(binary_op->lhs);
 		llvm::Value* ll_rhs = gen_expression(binary_op->rhs);
-		return nyla::llvm_builder->CreateAdd(ll_lhs, ll_rhs, "addt");
+		if (binary_op->checked_type->is_int()) {
+			return nyla::llvm_builder->CreateAdd(ll_lhs, ll_rhs, "addt");
+		}
+		return nyla::llvm_builder->CreateFAdd(ll_lhs, ll_rhs, "addft");
 	}
 	case '-': {
 		llvm::Value* ll_lhs = gen_expression(binary_op->lhs);
 		llvm::Value* ll_rhs = gen_expression(binary_op->rhs);
-		return nyla::llvm_builder->CreateSub(ll_lhs, ll_rhs, "subt");
+		if (binary_op->checked_type->is_int()) {
+			return nyla::llvm_builder->CreateSub(ll_lhs, ll_rhs, "subt");
+		}
+		return nyla::llvm_builder->CreateFSub(ll_lhs, ll_rhs, "subft");
 	}
 	case '*': {
 		llvm::Value* ll_lhs = gen_expression(binary_op->lhs);
 		llvm::Value* ll_rhs = gen_expression(binary_op->rhs);
-		return nyla::llvm_builder->CreateMul(ll_lhs, ll_rhs, "mult");
+		if (binary_op->checked_type->is_int()) {
+			return nyla::llvm_builder->CreateMul(ll_lhs, ll_rhs, "mult");
+		}
+		return nyla::llvm_builder->CreateFMul(ll_lhs, ll_rhs, "mulft");
 	}
 	case '/': {
 		llvm::Value* ll_lhs = gen_expression(binary_op->lhs);
 		llvm::Value* ll_rhs = gen_expression(binary_op->rhs);
-		return nyla::llvm_builder->CreateSDiv(ll_lhs, ll_rhs, "divt");
+		if (binary_op->checked_type->is_int()) {
+			return nyla::llvm_builder->CreateSDiv(ll_lhs, ll_rhs, "divt");
+		}
+		return nyla::llvm_builder->CreateFDiv(ll_lhs, ll_rhs, "divft");
 	}
 	case '<': {
 		llvm::Value* ll_lhs = gen_expression(binary_op->lhs);
@@ -210,11 +230,11 @@ llvm::Value* llvm_generator::gen_binary_op(nyla::abinary_op* binary_op) {
 	return nullptr;
 }
 
-llvm::Value* nyla::llvm_generator::gen_variable_decl(nyla::avariable_decl* variable_decl) {
+llvm::Value* llvm_generator::gen_variable_decl(nyla::avariable_decl* variable_decl) {
 	llvm::IRBuilder<> tmp_builder(m_bb, m_bb->begin());
 	llvm::AllocaInst* var_alloca;
 	var_alloca = tmp_builder.CreateAlloca(
-		gen_type(variable_decl->variable->type),
+		gen_type(variable_decl->variable->checked_type),
 		nullptr,                                    // Array size
 		variable_decl->variable->name.c_str());
 	m_sym_table.store_alloca(variable_decl->variable, var_alloca);
@@ -224,7 +244,7 @@ llvm::Value* nyla::llvm_generator::gen_variable_decl(nyla::avariable_decl* varia
 	return var_alloca;
 }
 
-llvm::Value* nyla::llvm_generator::gen_for_loop(nyla::afor_loop* for_loop) {
+llvm::Value* llvm_generator::gen_for_loop(nyla::afor_loop* for_loop) {
 	
 	// Generating declarations before entering the loop
 	for (nyla::avariable_decl* var_decl : for_loop->declarations) {
@@ -250,7 +270,7 @@ llvm::Value* nyla::llvm_generator::gen_for_loop(nyla::afor_loop* for_loop) {
 	nyla::llvm_builder->SetInsertPoint(ll_loop_body_bb);
 
 	// Generating the body of the loop
-	for (nyla::aexpr* stmt : for_loop->body) {
+	for (nyla::aexpr* stmt : for_loop->scope->stmts) {
 		gen_expression(stmt);
 	}
 	// Post loop expression
@@ -266,9 +286,51 @@ llvm::Value* nyla::llvm_generator::gen_for_loop(nyla::afor_loop* for_loop) {
 	return nullptr;
 }
 
-llvm::Value* nyla::llvm_generator::gen_variable(nyla::avariable* variable) {
+llvm::Value* llvm_generator::gen_variable(nyla::avariable* variable) {
 	// Assumed that the variable is already loaded and in scope!
 	return nyla::llvm_builder->CreateLoad(
 		m_sym_table.get_alloca(variable),
 		variable->name.c_str());;
+}
+
+llvm::Value* llvm_generator::gen_type_cast(nyla::atype_cast* type_cast) {
+	nyla::type* val_type       = type_cast->value->checked_type;
+	nyla::type* cast_to_type = type_cast->checked_type;
+	llvm::Value* ll_val      = gen_expression(type_cast->value);
+	llvm::Type* ll_cast_type = gen_type(type_cast->checked_type);
+	
+	if (val_type->is_int() && cast_to_type->is_int()) {
+		if (cast_to_type->get_mem_size() < val_type->get_mem_size()) {
+			// Signed and unsigned downcasting use trunc
+			return nyla::llvm_builder->CreateTrunc(ll_val, ll_cast_type, "trunctt");
+		} else {
+			if (cast_to_type->is_signed()) {
+				// Signed upcasting
+				return nyla::llvm_builder->CreateSExt(ll_val, ll_cast_type, "supcastt");
+			}
+		}
+	} else if (cast_to_type->is_float() && val_type->is_int()) {
+		// Int to floating point
+		if (val_type->is_signed()) {
+			return nyla::llvm_builder->CreateSIToFP(ll_val, ll_cast_type, "sitofpt");
+		} else {
+			return nyla::llvm_builder->CreateUIToFP(ll_val, ll_cast_type, "uitofpt");
+		}
+	} else if (cast_to_type->is_int() && val_type->is_float()) {
+		// Floating point to Int
+		if (cast_to_type->is_signed()) {
+			return nyla::llvm_builder->CreateFPToSI(ll_val, ll_cast_type, "fptosit");
+		} else {
+			return nyla::llvm_builder->CreateFPToUI(ll_val, ll_cast_type, "fptouit");
+		}
+	} else if (cast_to_type->is_float() && val_type->is_float()) {
+		if (cast_to_type->get_mem_size() > val_type->get_mem_size()) {
+			// Upcasting float
+			return nyla::llvm_builder->CreateFPExt(ll_val, ll_cast_type, "fpupcastt");
+		} else {
+			// Downcasting float
+			return nyla::llvm_builder->CreateFPTrunc(ll_val, ll_cast_type, "fptrunctt");
+		}
+	}
+	return nullptr;
 }

@@ -52,6 +52,8 @@ namespace nyla {
 
 		llvm::Value* gen_variable(nyla::avariable* variable);
 
+		llvm::Value* gen_type_cast(nyla::atype_cast* type_cast);
+
 	private:
 		nyla::sym_table   m_sym_table;
 		llvm::BasicBlock* m_bb;

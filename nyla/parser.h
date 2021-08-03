@@ -29,6 +29,8 @@ namespace nyla {
 
 		nyla::name parse_identifier();
 
+		nyla::ascope* parse_scope(bool pop_scope = true);
+
 		/// <summary>
 		/// Parses a type followed by a variable name.
 		/// 
@@ -64,7 +66,8 @@ namespace nyla {
 
 		nyla::aexpr* parse_factor();
 
-		nyla::aexpr* on_binary_op(u32 op, nyla::aexpr* lhs, nyla::aexpr* rhs);
+		nyla::aexpr* on_binary_op(nyla::token* op_token,
+				                  nyla::aexpr* lhs, nyla::aexpr* rhs);
 
 		nyla::aexpr* parse_expression();
 
@@ -95,6 +98,11 @@ namespace nyla {
 		/// semis = ';'+
 		/// </summary>
 		void match_semis();
+
+		template<typename node>
+		node* make_node(ast_tag tag, nyla::token* token) {
+			return nyla::make_node<node>(tag, token->line_num);
+		}
 
 		nyla::lexer     m_lexer;
 		nyla::sym_table m_sym_table;
