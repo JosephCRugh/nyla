@@ -1,12 +1,17 @@
 #include "analysis.h"
 
 #include <assert.h>
-#include "log.h"
 
 using namespace nyla;
 
 #include <unordered_set>
 #include <unordered_map>
+
+void analysis::type_check_file_unit(nyla::afile_unit* file_unit) {
+	for (nyla::afunction* function : file_unit->functions) {
+		type_check_function(function);
+	}
+}
 
 void analysis::type_check_function(nyla::afunction* function) {
 	m_function = function;
@@ -16,7 +21,25 @@ void analysis::type_check_function(nyla::afunction* function) {
 	m_function = nullptr;
 }
 
-void nyla::analysis::type_check_expression(nyla::aexpr* expr) {
+void nyla::analysis::type_check_function_call(nyla::afunction_call* function_call) {
+	nyla::afunction* called_function =
+		m_sym_table.get_declared_function(function_call->name);
+	if (called_function == nullptr) {
+		produce_error(ERR_FUNCTION_NOT_FOUND,
+			error_data::make_str_literal_load(function_call->name.c_str()),
+			function_call
+		);
+		function_call->checked_type = nyla::type::get_error();
+		return;
+	}
+	function_call->called_function = called_function;
+	function_call->checked_type = called_function->return_type;
+	for (nyla::aexpr* parameter_value : function_call->parameter_values) {
+		type_check_expression(parameter_value);
+	}
+}
+
+void analysis::type_check_expression(nyla::aexpr* expr) {
 	switch (expr->tag) {
 	case AST_VARIABLE_DECL:
 		type_check_variable_decl(dynamic_cast<nyla::avariable_decl*>(expr));
@@ -38,32 +61,43 @@ void nyla::analysis::type_check_expression(nyla::aexpr* expr) {
 	case AST_VALUE_DOUBLE:
 		type_check_number(dynamic_cast<nyla::anumber*>(expr));
 		break;
+	case AST_VALUE_BOOL:
+		expr->checked_type = nyla::type::get_bool();
+		break;
 	case AST_BINARY_OP:
 		type_check_binary_op(dynamic_cast<nyla::abinary_op*>(expr));
+		break;
+	case AST_FUNCTION_CALL:
+		type_check_function_call(dynamic_cast<nyla::afunction_call*>(expr));
+		break;
+	case AST_ERROR:
+		expr->checked_type = nyla::type::get_error();
+		break;
+	default:
+		assert(!"Failed to implement a type check");
 		break;
 	}
 }
 
-void nyla::analysis::type_check_return(nyla::areturn* ret) {
+void analysis::type_check_return(nyla::areturn* ret) {
 	if (ret->value == nullptr) {
 		// Ensuring that the return type of the function
 		// is void.
 		if (m_function->return_type->tag != TYPE_VOID) {
-			nyla::g_log->error(ERR_SHOULD_RETURN_VALUE, ret->line_num,
-				error_data::make_empty_load());
+			produce_error(ERR_SHOULD_RETURN_VALUE, nullptr, ret);
 		}
 	} else {
 		type_check_expression(ret->value);
 		if (is_convertible_to(ret->value->checked_type, m_function->return_type)) {
 			ret->value->checked_type = m_function->return_type;
 		} else {
-			nyla::g_log->error(ERR_RETURN_TYPE_MISMATCH, ret->line_num,
-				type_mismatch_data::make_type_mismatch(m_function->return_type, ret->value->checked_type));
+			//nyla::g_log->error(ERR_RETURN_TYPE_MISMATCH, ret->line_num,
+			//	type_mismatch_data::make_type_mismatch(m_function->return_type, ret->value->checked_type));
 		}
 	}
 }
 
-void nyla::analysis::type_check_number(nyla::anumber* number) {
+void analysis::type_check_number(nyla::anumber* number) {
 	// Nothing really to do since numbers already have types assigned.
 	// Just mapping the tag to the proper type.
 	switch (number->tag) {
@@ -77,13 +111,23 @@ void nyla::analysis::type_check_number(nyla::anumber* number) {
 }
 
 
-void nyla::analysis::type_check_binary_op(nyla::abinary_op* binary_op) {
+void analysis::type_check_binary_op(nyla::abinary_op* binary_op) {
 	type_check_expression(binary_op->lhs);
 	type_check_expression(binary_op->rhs);
 	// TODO: this will need a number of modifications once modules
 	// added
 	nyla::type* lhs_checked_type = binary_op->lhs->checked_type;
 	nyla::type* rhs_checked_type = binary_op->rhs->checked_type;
+
+	// Must have already been dealt with.
+	if (binary_op->lhs->tag == AST_ERROR || binary_op->rhs->tag == AST_ERROR) {
+		binary_op->checked_type = nyla::type::get_error();
+		return;
+	}
+	if (lhs_checked_type->tag == TYPE_ERROR || rhs_checked_type->tag == TYPE_ERROR) {
+		binary_op->checked_type = nyla::type::get_error();
+		return;
+	}
 
 	if (lhs_checked_type == rhs_checked_type) {
 		binary_op->checked_type = lhs_checked_type;
@@ -93,16 +137,28 @@ void nyla::analysis::type_check_binary_op(nyla::abinary_op* binary_op) {
 		// TODO: convert to the larger integer size
 		if (!lhs_checked_type->is_int()) {
 			// TODO: produce error
+			binary_op->checked_type = nyla::type::get_error();
+			return;
 		}
 		if (!lhs_checked_type->is_int()) {
 			// TODO: produce error
+			binary_op->checked_type = nyla::type::get_error();
+			return;
 		}
 	} else if (only_works_on_numbers(binary_op->op)) {
 		if (!lhs_checked_type->is_number()) {
-			// TODO: produce error
+			produce_error(ERR_OP_CANNOT_APPLY_TO,
+				op_applies_to_data::make_applies_to(binary_op->op, binary_op->rhs->st),
+				binary_op);
+			binary_op->checked_type = nyla::type::get_error();
+			return;
 		}
 		if (!rhs_checked_type->is_number()) {
-			// TODO: produce error
+			produce_error(ERR_OP_CANNOT_APPLY_TO,
+				op_applies_to_data::make_applies_to(binary_op->op, binary_op->rhs->st),
+				binary_op);
+			binary_op->checked_type = nyla::type::get_error();
+			return;
 		}
 		if (lhs_checked_type != rhs_checked_type) {
 			if (lhs_checked_type->is_int() && rhs_checked_type->is_int()) {
@@ -136,9 +192,10 @@ void nyla::analysis::type_check_binary_op(nyla::abinary_op* binary_op) {
 	} else if (binary_op->op == '=') {
 		// At the moment it is very strict and always requires
 		// the types be the same. Should probably allow upcasting
-		if (lhs_checked_type != rhs_checked_type) {
-			nyla::g_log->error(ERR_CANNOT_ASSIGN, binary_op->line_num,
-				type_mismatch_data::make_type_mismatch(lhs_checked_type, rhs_checked_type));
+		if (!is_convertible_to(lhs_checked_type, rhs_checked_type)) {
+			produce_error(ERR_CANNOT_ASSIGN,
+				type_mismatch_data::make_type_mismatch(lhs_checked_type, rhs_checked_type),
+				binary_op);
 			
 		}
 		binary_op->checked_type = lhs_checked_type;
@@ -151,21 +208,26 @@ void nyla::analysis::type_check_binary_op(nyla::abinary_op* binary_op) {
 	}
 }
 
-void nyla::analysis::type_check_variable_decl(nyla::avariable_decl* variable_decl) {
+void analysis::type_check_variable_decl(nyla::avariable_decl* variable_decl) {
 	m_sym_table.store_variable_type(variable_decl->variable);
 	if (variable_decl->assignment != nullptr) {
 		type_check_expression(variable_decl->assignment);
 	}
 }
 
-void nyla::analysis::type_check_type_cast(nyla::atype_cast* type_cast) {
+void analysis::type_check_type_cast(nyla::atype_cast* type_cast) {
 	type_check_expression(type_cast->value);
 }
 
-void nyla::analysis::type_check_variable(nyla::avariable* variable) {
+void analysis::type_check_variable(nyla::avariable* variable) {
 	// Since the variable was declared previously we simple look up
 	// it's type.
 	variable->checked_type = m_sym_table.get_variable_type(variable);
+	// Possible it was not declared in which case this
+	// TODO: handle this problem
+	if (variable->checked_type == nullptr) {
+		variable->checked_type = nyla::type::get_error(); // Tempory fix
+	}
 }
 
 void nyla::analysis::type_check_for_loop(nyla::afor_loop* for_loop) {
@@ -174,12 +236,13 @@ void nyla::analysis::type_check_for_loop(nyla::afor_loop* for_loop) {
 	}
 	type_check_expression(for_loop->cond);
 	if (for_loop->cond->checked_type->tag != TYPE_BOOL) {
-		// TODO: report error
+		if (for_loop->cond->checked_type->tag != TYPE_ERROR) {
+			produce_error(ERR_EXPECTED_BOOL_COND, nullptr, for_loop->cond);
+		}
 	}
 	for (nyla::aexpr* stmt : for_loop->scope->stmts) {
 		type_check_expression(stmt);
 	}
-	type_check_expression(for_loop->post);
 }
 
 bool analysis::is_convertible_to(nyla::type* from, nyla::type* to) {
@@ -189,14 +252,14 @@ bool analysis::is_convertible_to(nyla::type* from, nyla::type* to) {
 	return from == to; // This may be too strict.
 }
 
-bool nyla::analysis::only_works_on_ints(u32 op) {
+bool analysis::only_works_on_ints(u32 op) {
 	switch (op) {
 	default:
 		return false;
 	}
 }
 
-bool nyla::analysis::only_works_on_numbers(u32 op) {
+bool analysis::only_works_on_numbers(u32 op) {
 	switch (op) {
 	case '+': case '-': case '*': case '/':
 	case '<':
@@ -206,7 +269,7 @@ bool nyla::analysis::only_works_on_numbers(u32 op) {
 	}
 }
 
-bool nyla::analysis::is_comp_op(u32 op) {
+bool analysis::is_comp_op(u32 op) {
 	switch (op) {
 	case '<':
 		return true;
@@ -215,10 +278,15 @@ bool nyla::analysis::is_comp_op(u32 op) {
 	}
 }
 
-nyla::atype_cast* nyla::analysis::make_cast(nyla::aexpr* value, nyla::type* cast_to_type) {
+nyla::atype_cast* analysis::make_cast(nyla::aexpr* value, nyla::type* cast_to_type) {
 	nyla::atype_cast* type_cast =
-		nyla::make_node<nyla::atype_cast>(AST_TYPE_CAST, value->line_num);
+		nyla::make_node<nyla::atype_cast>(AST_TYPE_CAST, nullptr, nullptr);
 	type_cast->value        = value;
 	type_cast->checked_type = cast_to_type;
 	return type_cast;
+}
+
+void analysis::produce_error(error_tag tag, error_data* data,
+	                         nyla::ast_node* node) {
+	m_log.error(tag, data, node->st, node->et);
 }

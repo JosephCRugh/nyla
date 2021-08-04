@@ -2,6 +2,7 @@
 
 #include "name.h"
 #include <string>
+#include <unordered_map>
 
 namespace nyla {
 
@@ -37,7 +38,7 @@ namespace nyla {
 
 		TK_RETURN,
 
-		__TK_END_OF_KEYWORDS = TK_TYPE_VOID,
+		__TK_END_OF_KEYWORDS = TK_RETURN,
 
 		// === Values === \\
 
@@ -60,9 +61,20 @@ namespace nyla {
 
 	std::string token_tag_to_string(u32 tag);
 
+	extern std::unordered_map<nyla::name, nyla::token_tag,
+		nyla::name::hash_gen> reserved_words;
+	extern std::unordered_map<u32, nyla::name>
+		reversed_reserved_words;
+
+	extern nyla::name bool_true_word;
+	extern nyla::name bool_false_word;
+
+	void setup_tokens();
+
 	struct token {
 		u32 tag;
 		u32 line_num;
+		u32 spos, epos;   // Start and end position in the buffer
 		
 		virtual ~token() {}
 
@@ -164,6 +176,25 @@ namespace nyla {
 			default: return false;
 			}
 			return false;
+		}
+	};
+
+	struct bool_token : public token {
+		bool tof;
+
+		virtual ~bool_token() {}
+
+		bool_token(u32 _tag) : token(_tag) {}
+
+		virtual std::string to_string() const override {
+			if (tof) return "true";
+			return "false";
+		}
+
+		bool equals(const nyla::token& o) const override {
+			if (tag != o.tag) return false;
+			const bool_token* bt = dynamic_cast<const bool_token*>(&o);
+			return tof == bt->tof;
 		}
 	};
 }

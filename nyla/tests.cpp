@@ -24,14 +24,16 @@ void run_lexer_tests() {
 	test("lexer_tests");
 	{
 		nyla::reader reader("var my_var5 gg");
-		nyla::lexer lexer(reader);
+		nyla::log log(reader);
+		nyla::lexer lexer(reader, log);
 		check_eq(lexer.next_token(), new nyla::word_token(nyla::TK_IDENTIFIER, nyla::name::make("var")));
 		check_eq(lexer.next_token(), new nyla::word_token(nyla::TK_IDENTIFIER, nyla::name::make("my_var5")));
 		check_eq(lexer.next_token(), new nyla::word_token(nyla::TK_IDENTIFIER, nyla::name::make("gg")));	
 	}
 	{
 		nyla::reader reader("void byte short int long float double");
-		nyla::lexer lexer(reader);
+		nyla::log log(reader);
+		nyla::lexer lexer(reader, log);
 		check_eq(lexer.next_token(), nyla::get_reserved_word_token("void"));
 		check_eq(lexer.next_token(), nyla::get_reserved_word_token("byte"));
 		check_eq(lexer.next_token(), nyla::get_reserved_word_token("short"));
@@ -42,7 +44,8 @@ void run_lexer_tests() {
 	}
 	{
 		nyla::reader reader("if return else switch do for while");
-		nyla::lexer lexer(reader);
+		nyla::log log(reader);
+		nyla::lexer lexer(reader, log);
 		check_eq(lexer.next_token(), nyla::get_reserved_word_token("if"));
 		check_eq(lexer.next_token(), nyla::get_reserved_word_token("return"));
 		check_eq(lexer.next_token(), nyla::get_reserved_word_token("else"));
@@ -53,7 +56,8 @@ void run_lexer_tests() {
 	}
 	{
 		nyla::reader reader("+ - / * = ; () {} <> += -= /= *=");
-		nyla::lexer lexer(reader);
+		nyla::log log(reader);
+		nyla::lexer lexer(reader, log);
 		check_eq(lexer.next_token(), new nyla::default_token('+'));
 		check_eq(lexer.next_token(), new nyla::default_token('-'));
 		check_eq(lexer.next_token(), new nyla::default_token('/'));
@@ -73,27 +77,37 @@ void run_lexer_tests() {
 	}
 	{
 		nyla::reader reader("1323   123.02   124.412E+3  123.2E-2");
-		nyla::lexer lexer(reader);
+		nyla::log log(reader);
+		nyla::lexer lexer(reader, log);
 		check_eq(lexer.next_token(), nyla::num_token::make_int(1323));
 		check_eq(lexer.next_token(), nyla::num_token::make_double(123.02));
 		check_eq(lexer.next_token(), nyla::num_token::make_double(124.412E+3));
 		check_eq(lexer.next_token(), nyla::num_token::make_double(123.2E-2));
 	}
-	nyla::g_log->set_should_print(false);
 	{
 		nyla::reader reader("24346345142135325124342356235");
-		nyla::lexer lexer(reader);
+		nyla::log log(reader);
+		log.set_should_print(false);
+		nyla::lexer lexer(reader, log);
 		lexer.next_token();
-		check_eq(nyla::ERR_INT_TOO_LARGE, nyla::g_log->last_err_and_reset(), "Too large error");
+		check_eq(nyla::ERR_INT_TOO_LARGE, log.get_last_error_tag(), "Too large error");
 	}
-	nyla::g_log->set_should_print(true);
+	{
+		nyla::reader reader("213.0E+1242153253263412321146");
+		nyla::log log(reader);
+		log.set_should_print(false);
+		nyla::lexer lexer(reader, log);
+		lexer.next_token();
+		check_eq(nyla::ERR_EXPONENT_TOO_LARGE, log.get_last_error_tag(), "Too large error");
+	}
 }
 
-#define parser_setup(text) \
-nyla::reader reader(text); \
-nyla::lexer lexer(reader); \
-nyla::sym_table sym_table; \
-nyla::parser parser(lexer, sym_table);
+#define parser_setup(text)      \
+nyla::reader reader(text);      \
+nyla::log log(reader);          \
+nyla::lexer lexer(reader, log); \
+nyla::sym_table sym_table;      \
+nyla::parser parser(lexer, sym_table, log);
 
 void function_decl_test(c_string text, nyla::type_tag return_type,
 	c_string fname,
@@ -112,6 +126,10 @@ void function_decl_test(c_string text, nyla::type_tag return_type,
 			check_eq(function->parameters[i]->variable->name, nyla::name::make(param_names[i]), "Parameter Name Check");
 			check_eq(function->parameters[i]->variable->checked_type->tag, param_types[i], "Parameter Type Check");
 		}
+	}
+	// Cleaning up the tokens to free memory.
+	for (nyla::token* token : parser.get_processed_tokens()) {
+		delete token;
 	}
 	std::cout << "---------------------------" << std::endl;
 }
@@ -149,6 +167,7 @@ std::unordered_map<std::string, int> program_err_codes = {
 				sum = sum * sum;
 				return sum;
 			}()  },
+	{ "func_call.nyla", 7+54 }
 };
 
 void run_llvm_gen_tests() {
@@ -157,32 +176,31 @@ void run_llvm_gen_tests() {
 
 	nyla::init_native_target();
 
-	nyla::log* l = nyla::g_log;
-
-	nyla::for_files(L"resources/*", [&l](const std::string& fpath) {
+	nyla::for_files(L"resources/*", [](const std::string& fpath) {
 		// TODO make sure they are .nyla files
-
+		
 		c8* buffer;
 		ulen buffer_size;
 		nyla::read_file("resources/" + fpath, buffer, buffer_size);
 		nyla::reader reader(buffer, buffer_size);
-		nyla::lexer lexer(reader);
+		nyla::log log(reader);
+		nyla::lexer lexer(reader, log);
+		
 		nyla::sym_table sym_table;
-		nyla::parser parser(lexer, sym_table);
-		nyla::analysis analysis(sym_table);
+		nyla::parser parser(lexer, sym_table, log);
+		nyla::analysis analysis(sym_table, log);
 
 		nyla::working_llvm_module = new llvm::Module("My Module", *nyla::llvm_context);
 		nyla::llvm_generator generator;
-		nyla::afunction* nfunction = parser.parse_function();
-		analysis.type_check_function(nfunction);
+		nyla::afile_unit* file_unit = parser.parse_file_unit();
+		analysis.type_check_file_unit(file_unit);
 
-		if (l->get_num_errors() != 0) {
+		std::cout << file_unit << std::endl;
+		if (log.get_num_errors() != 0) {
 			return;
 		}
-
-		std::cout << nfunction << std::endl;
-		llvm::Function* function = generator.gen_function(nfunction);
-		function->print(llvm::errs());
+		
+		generator.gen_file_unit(file_unit, true);
 		std::string out_path = fpath.substr(0, fpath.size()-5).append(".o");
 		nyla::write_obj_file(out_path.c_str());
 
@@ -194,9 +212,18 @@ void run_llvm_gen_tests() {
 			check_eq(err_code, it->second, "Error code check");
 		}
 
+		// Cleaning up the tokens to free memory.
+		for (nyla::token* token : parser.get_processed_tokens()) {
+			delete token;
+		}
 		delete[] buffer;
 
 	});
 
 	delete nyla::working_llvm_module;
+}
+
+void print_fail_pass_rate() {
+	std::cout << "Passed: " << passed_tests << std::endl;
+	std::cout << "Failed: " << failed_tests << std::endl;
 }

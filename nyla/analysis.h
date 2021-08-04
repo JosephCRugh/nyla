@@ -2,16 +2,22 @@
 
 #include "ast.h"
 #include "sym_table.h"
+#include "log.h"
 
 namespace nyla {
 
 	class analysis {
 	public:
 
-		analysis(nyla::sym_table& sym_table) : m_sym_table(sym_table) {
+		analysis(nyla::sym_table& sym_table, nyla::log& log)
+			: m_sym_table(sym_table), m_log(log) {
 		}
 
+		void type_check_file_unit(nyla::afile_unit* file_unit);
+
 		void type_check_function(nyla::afunction* function);
+
+		void type_check_function_call(nyla::afunction_call* function_call);
 
 		void type_check_expression(nyla::aexpr* expr);
 
@@ -41,8 +47,12 @@ namespace nyla {
 
 		nyla::atype_cast* make_cast(nyla::aexpr* value, nyla::type* cast_to_type);
 
+		void produce_error(error_tag tag, error_data* data,
+			               nyla::ast_node* node);
+
 		nyla::afunction* m_function;
-		nyla::sym_table  m_sym_table;
+		nyla::sym_table& m_sym_table;
+		nyla::log&       m_log;
 
 	};
 }

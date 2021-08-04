@@ -27,6 +27,8 @@ namespace nyla {
 
 		std::string from_range(const std::tuple<u32, u32>& range);
 
+		std::string from_window_till_nl(u32 start_pos, s32 direction);
+
 	private:
 		u32      m_length;
 		c_string m_buffer;

@@ -16,7 +16,7 @@
 
 int main() {
 
-	nyla::setup_lexer();
+	nyla::setup_tokens();
 
 	run_reader_tests();
 
@@ -27,6 +27,8 @@ int main() {
 	nyla::init_llvm();
 	
 	run_llvm_gen_tests();
+
+	print_fail_pass_rate();
 
 	nyla::clean_llvm();
 	

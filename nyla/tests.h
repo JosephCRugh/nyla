@@ -7,3 +7,5 @@ void run_lexer_tests();
 void run_parser_tests();
 
 void run_llvm_gen_tests();
+
+void print_fail_pass_rate();

@@ -4,6 +4,7 @@
 #include "type.h"
 #include "name.h"
 #include <vector>
+#include <llvm/IR/Function.h>
 
 namespace nyla {
 
@@ -16,14 +17,19 @@ namespace nyla {
 		AST_VALUE_INT,
 		AST_VALUE_FLOAT,
 		AST_VALUE_DOUBLE,
+		AST_VALUE_BOOL,
 		AST_BINARY_OP,
 		AST_FOR_LOOP,
-		AST_TYPE_CAST
+		AST_TYPE_CAST,
+		AST_FILE_UNIT,
+		AST_FUNCTION_CALL,
+		AST_ERROR
 	};
 
 	struct ast_node {
 		ast_tag tag;
-		u32     line_num;
+		nyla::token* st = nullptr;
+		nyla::token* et = nullptr;
 		
 		virtual ~ast_node() {}
 
@@ -41,6 +47,13 @@ namespace nyla {
 		virtual ~aexpr() {}
 		virtual void print(std::ostream& os, u32 depth = 0) const = 0;
 		nyla::type* checked_type;
+	};
+
+	struct err_expr : public aexpr {
+		virtual ~err_expr() {}
+		virtual void print(std::ostream& os, u32 depth) const override {
+			os << indent(depth) << "Error Expr";
+		}
 	};
 
 	struct atype_cast : public aexpr {
@@ -101,7 +114,6 @@ namespace nyla {
 		virtual ~afor_loop() {}
 		std::vector<nyla::avariable_decl*> declarations;
 		nyla::aexpr*                       cond = nullptr;
-		nyla::aexpr*                       post = nullptr;
 		nyla::ascope*                      scope;
 		virtual void print(std::ostream& os, u32 depth) const override {
 			os << indent(depth) << "for_loop" << std::endl;
@@ -117,10 +129,6 @@ namespace nyla {
 			}
 			os << indent(depth) << "loop__body:" << std::endl;
 			scope->print(os, depth + 1);
-			os << indent(depth) << "loop__post_body:" << std::endl;
-			if (post) {
-				post->print(os, depth + 1);
-			}
 		}
 	};
 
@@ -144,6 +152,15 @@ namespace nyla {
 		}
 	};
 
+	struct abool : aexpr {
+		virtual ~abool() {}
+		bool tof;
+		virtual void print(std::ostream& os, u32 depth) const override {
+			os << indent(depth);
+			if (tof) os << "true"; else os << "false";
+		}
+	};
+
 	struct abinary_op : public aexpr {
 		virtual ~abinary_op() {}
 		u32 op;
@@ -163,6 +180,7 @@ namespace nyla {
 		nyla::name                         name;
 		std::vector<nyla::avariable_decl*> parameters;
 		nyla::ascope*                      scope;
+		llvm::Function*                    ll_function; // Needed for function calls
 		virtual void print(std::ostream& os, u32 depth) const override {
 			os << std::string(depth * 4, ' ');
 			os << "function: " << name << std::endl;
@@ -170,11 +188,37 @@ namespace nyla {
 		}
 	};
 
+	struct afunction_call : public aexpr {
+		virtual ~afunction_call() {}
+		nyla::name                name;
+		std::vector<nyla::aexpr*> parameter_values;
+		nyla::afunction*          called_function = nullptr;
+		virtual void print(std::ostream& os, u32 depth) const override {
+			os << indent(depth) << "function call: " << name << std::endl;
+			for (nyla::aexpr* parameter_value : parameter_values) {
+				parameter_value->print(os, depth + 1);
+				os << std::endl;
+			}
+		}
+	};
+
+	struct afile_unit : public ast_node {
+		virtual ~afile_unit() {}
+		std::vector<nyla::afunction*> functions;
+		virtual void print(std::ostream& os, u32 depth) const override {
+			for (nyla::afunction* function : functions) {
+				function->print(os, depth);
+				os << std::endl;
+			}
+		}
+	};
+
 	template<typename node>
-	node* make_node(ast_tag tag, u32 line_num) {
+	node* make_node(ast_tag tag, nyla::token* st, nyla::token* et) {
 		node* n = new node;
 		n->tag = tag;
-		n->line_num = line_num;
+		n->st = st;
+		n->et = et;
 		return n;
 	}
 }

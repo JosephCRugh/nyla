@@ -8,6 +8,9 @@
 #define test_header_length      46
 #define test_half_header_length (test_header_length >> 1)
 
+static u32 failed_tests = 0;
+static u32 passed_tests = 0;
+
 void print_check_heading(const char* msg) {
 	set_console_color(test_color_yellow);
 	std::cout << msg;
@@ -16,9 +19,11 @@ void print_check_heading(const char* msg) {
 
 void print_success_state(bool tof) {
 	if (tof) {
+		++passed_tests;
 		set_console_color(test_color_green);
 		std::cout << " (OK)";
 	} else {
+		++failed_tests;
 		set_console_color(test_color_red);
 		std::cout << " (FAIL)";
 	}

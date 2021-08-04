@@ -34,7 +34,11 @@ namespace nyla {
 	class llvm_generator {
 	public:
 
+		void gen_file_unit(nyla::afile_unit* file_unit, bool print_functions = false);
+
 		llvm::Function* gen_function(nyla::afunction* function);
+
+		llvm::Value* gen_function_call(nyla::afunction_call* function_call);
 
 		llvm::Type* gen_type(nyla::type* type);
 
@@ -55,6 +59,9 @@ namespace nyla {
 		llvm::Value* gen_type_cast(nyla::atype_cast* type_cast);
 
 	private:
+
+		llvm::AllocaInst* gen_alloca(nyla::avariable* variable);
+
 		nyla::sym_table   m_sym_table;
 		llvm::BasicBlock* m_bb;
 		llvm::Function*   m_ll_function;

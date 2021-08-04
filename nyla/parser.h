@@ -3,13 +3,16 @@
 #include "lexer.h"
 #include "ast.h"
 #include "sym_table.h"
+#include "log.h"
 #include <queue>
 
 namespace nyla {
 
 	class parser {
 	public:
-		parser(nyla::lexer& lexer, nyla::sym_table& sym_table);
+		parser(nyla::lexer& lexer, nyla::sym_table& sym_table, nyla::log& log);
+
+		nyla::afile_unit* parse_file_unit();
 
 		/// <summary>
 		/// 
@@ -29,7 +32,7 @@ namespace nyla {
 
 		nyla::name parse_identifier();
 
-		nyla::ascope* parse_scope(bool pop_scope = true);
+		nyla::ascope* parse_scope();
 
 		/// <summary>
 		/// Parses a type followed by a variable name.
@@ -69,9 +72,13 @@ namespace nyla {
 		nyla::aexpr* on_binary_op(nyla::token* op_token,
 				                  nyla::aexpr* lhs, nyla::aexpr* rhs);
 
-		nyla::aexpr* parse_expression();
+		nyla::aexpr* parse_expression(bool undo_recovery = true);
 
-		nyla::aexpr* parse_expression(nyla::aexpr* lhs);
+		nyla::aexpr* parse_expression(nyla::aexpr* lhs, bool undo_recovery = true);
+
+		nyla::afunction_call* parse_function_call(nyla::name& name, nyla::token* start_token);
+
+		std::vector<nyla::token*> get_processed_tokens() { return m_processed_tokens; }
 
 	private:
 
@@ -92,26 +99,38 @@ namespace nyla {
 		/// <param name="token_tag">The tag to compare against</param>
 		/// <param name="consume">If the current token should be consumed
 		/// given a successful match</param>
-		void match(u32 token_tag, bool consume = true);
+		bool match(u32 token_tag, bool consume = true);
 		
 		/// <summary>
 		/// semis = ';'+
 		/// </summary>
 		void match_semis();
 
+		void expression_recovery();
+
 		template<typename node>
-		node* make_node(ast_tag tag, nyla::token* token) {
-			return nyla::make_node<node>(tag, token->line_num);
+		node* make_node(ast_tag tag, nyla::token* st, nyla::token* et) {
+			return nyla::make_node<node>(tag, st, et);
 		}
 
-		nyla::lexer     m_lexer;
-		nyla::sym_table m_sym_table;
+		nyla::lexer&     m_lexer;
+		nyla::sym_table& m_sym_table;
+		nyla::log&       m_log;
 
 		   /* Tokens saved during peeking */
 		std::queue<nyla::token*> m_saved_tokens;
 
+		  /* Storing tokens so they can be cleaned up */
+		std::vector<nyla::token*> m_processed_tokens;
+
+		nyla::token* look_back(s32 n);
+
+		void produce_error(error_tag tag, error_data* data,
+			               nyla::token* start_token, nyla::token* end_token);
+
 		nyla::token* m_current   = nullptr;
 		bool         m_found_ret = false;
+		bool         m_error_recovery = false;
 
 	};
 

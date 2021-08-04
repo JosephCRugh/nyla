@@ -1,22 +1,37 @@
 #include "parser.h"
 
-#include "log.h"
 #include <unordered_map>
 
 using namespace nyla;
 
-parser::parser(nyla::lexer& lexer, nyla::sym_table& sym_table)
-	: m_lexer(lexer), m_sym_table(sym_table)
+parser::parser(nyla::lexer& lexer, nyla::sym_table& sym_table, nyla::log& log)
+	: m_lexer(lexer), m_sym_table(sym_table), m_log(log)
 {
 	// Read first token to get things started.
 	next_token();
+}
+
+nyla::afile_unit* nyla::parser::parse_file_unit() {
+	nyla::afile_unit* file_unit = make_node<nyla::afile_unit>(AST_FILE_UNIT, nullptr, nullptr);
+	while (m_current->tag != TK_EOF) {
+		switch (m_current->tag) {
+		case TK_TYPE_BYTE:  case TK_TYPE_SHORT:
+		case TK_TYPE_INT:   case TK_TYPE_LONG:
+		case TK_TYPE_FLOAT: case TK_TYPE_DOUBLE:
+		case TK_TYPE_BOOL:  case TK_TYPE_VOID: {
+			file_unit->functions.push_back(parse_function());
+			break;
+		}
+		}
+	}
+	return file_unit;
 }
 
 nyla::afunction* parser::parse_function_decl() {
 	// TODO: parse function modifiers (public, private access, ect..)
 	nyla::type* return_type = parse_type();
 
-	nyla::afunction* function = make_node<nyla::afunction>(AST_FUNCTION, m_current);
+	nyla::afunction* function = make_node<nyla::afunction>(AST_FUNCTION, m_current, m_current);
 	function->return_type = return_type;
 	function->name        = parse_identifier();
 	
@@ -42,10 +57,17 @@ nyla::afunction* parser::parse_function_decl() {
 
 nyla::afunction* nyla::parser::parse_function() {
 	nyla::afunction* function = parse_function_decl();
+	m_sym_table.store_function_decl(function);
 	m_found_ret = false;
-	function->scope = parse_scope(false);
+	nyla::ascope* scope = m_sym_table.push_scope(m_current);
+	function->scope = scope;
+	match('{');
+	while (m_current->tag != '}' && m_current->tag != TK_EOF) {
+		scope->stmts.push_back(parse_function_stmt());
+	}
+	match('}');
 	if (!m_found_ret && function->return_type->tag == TYPE_VOID) {
-		nyla::areturn* void_ret = make_node<nyla::areturn>(AST_RETURN, m_current);
+		nyla::areturn* void_ret = make_node<nyla::areturn>(AST_RETURN, nullptr, nullptr);
 		function->scope->stmts.push_back(void_ret);
 	}
 	m_sym_table.pop_scope();
@@ -54,6 +76,7 @@ nyla::afunction* nyla::parser::parse_function() {
 
 nyla::type* parser::parse_type() {
 	nyla::type* type = nyla::type::get_error();
+	nyla::token* st = m_current;
 	switch (m_current->tag) {
 	case TK_TYPE_BYTE:   type = nyla::type::get_byte();   next_token(); break;
 	case TK_TYPE_SHORT:  type = nyla::type::get_short();  next_token(); break;
@@ -64,10 +87,15 @@ nyla::type* parser::parse_type() {
 	case TK_TYPE_BOOL:   type = nyla::type::get_bool();   next_token(); break;
 	case TK_TYPE_VOID:   type = nyla::type::get_void();   next_token(); break;
 	default:
-		nyla::g_log->error(ERR_CANNOT_RESOLVE_TYPE, m_lexer.get_line_num(),
-			error_data::make_str_literal_load(m_current->to_string().c_str()));
+		produce_error(
+			ERR_CANNOT_RESOLVE_TYPE,
+			error_data::make_str_literal_load(m_current->to_string().c_str()),
+			m_current, m_current
+		);
 		break;
 	}
+	type->st = st;
+	type->et = m_current;
 	return type;
 }
 
@@ -77,22 +105,21 @@ nyla::name parser::parse_identifier() {
 		next_token(); // Consuming identifier
 		return name;
 	} else {
-		nyla::g_log->error(ERR_EXPECTED_IDENTIFIER, m_lexer.get_line_num(),
-			error_data::make_empty_load());
+		produce_error(ERR_EXPECTED_IDENTIFIER,
+			error_data::make_empty_load(),
+			look_back(1), look_back(1));
 	}
 	return nyla::name();
 }
 
-nyla::ascope* nyla::parser::parse_scope(bool pop_scope) {
+nyla::ascope* nyla::parser::parse_scope() {
 	nyla::ascope* scope = m_sym_table.push_scope(m_current);
 	match('{');
-	while (m_current->tag != '}' && m_current->tag != '\0') {
+	while (m_current->tag != '}' && m_current->tag != TK_EOF) {
 		scope->stmts.push_back(parse_function_stmt());
 	}
 	match('}');
-	if (pop_scope) {
-		m_sym_table.pop_scope();
-	}
+	m_sym_table.pop_scope();
 	return scope;
 }
 
@@ -102,12 +129,19 @@ nyla::avariable_decl* nyla::parser::parse_variable_decl() {
 
 nyla::avariable_decl* nyla::parser::parse_variable_decl(nyla::type* type) {
 	nyla::avariable* variable =
-		make_node<nyla::avariable>(AST_VARIABLE, m_current);
+		make_node<nyla::avariable>(AST_VARIABLE, m_current, m_current);
 	variable->checked_type = type;
 	variable->name = parse_identifier();
 	nyla::avariable_decl* variable_delc =
-		make_node<nyla::avariable_decl>(AST_VARIABLE_DECL, m_current);
+		make_node<nyla::avariable_decl>(AST_VARIABLE_DECL, type->st, variable->st);
 	variable_delc->variable = variable;
+	if (m_sym_table.has_been_declared(variable)) {
+		produce_error(ERR_VARIABLE_REDECLARATION,
+			error_data::make_str_literal_load(variable->name.c_str()),
+			type->st, variable->st);
+	} else {
+		m_sym_table.store_variable_decl(variable);
+	}
 	return variable_delc;
 }
 
@@ -131,7 +165,7 @@ std::vector<avariable_decl*> nyla::parser::parse_variable_assign_list() {
 nyla::aexpr* parser::parse_function_stmt() {
 	switch (m_current->tag) {
 	case TK_RETURN: {
-		nyla::areturn* ret = make_node<nyla::areturn>(AST_RETURN, m_current);
+		nyla::areturn* ret = make_node<nyla::areturn>(AST_RETURN, m_current, m_current);
 		next_token(); // Consuming return token.
 		m_found_ret = true;
 		if (m_current->tag == ';') {
@@ -180,25 +214,41 @@ nyla::aexpr* parser::parse_function_stmt() {
 		return parse_function_stmt();
 	}
 	default: {
-		nyla::g_log->error(ERR_EXPECTED_STMT, m_lexer.get_line_num(),
-			error_data::make_token_tag_load(m_current->tag));
+		produce_error(
+			ERR_EXPECTED_STMT,
+			error_data::make_token_load(m_current),
+			m_current, m_current
+		);
 		next_token(); // Consuming the token that doesn't belong
-		return nullptr;
+		return make_node<nyla::err_expr>(AST_ERROR, nullptr, nullptr);
 	}
 	}
 }
 
 nyla::aexpr* nyla::parser::parse_for_loop() {
-	nyla::afor_loop* loop = make_node<nyla::afor_loop>(AST_FOR_LOOP, m_current);
+	nyla::afor_loop* loop = make_node<nyla::afor_loop>(AST_FOR_LOOP, m_current, m_current);
 	next_token(); // Consuming for token.
 	if (m_current->tag != ';') {
 		loop->declarations = parse_variable_assign_list();
 	}
 	match(';');
-	loop->cond = parse_expression();
+	if (m_current->tag != ';') {
+		loop->cond = parse_expression();
+	} else {
+		// If there is no expression it is just assumed to always be true!
+		abool* always_true = make_node<nyla::abool>(AST_VALUE_BOOL, m_current, m_current);
+		always_true->tof = true;
+		loop->cond = always_true;
+	}
 	match(';');
-	loop->post = parse_expression();
+	nyla::aexpr* post = nullptr;
+	if (m_current->tag != '{') {
+		post = parse_expression();
+	}
 	loop->scope = parse_scope();
+	if (post) {
+		loop->scope->stmts.push_back(post);
+	}
 	return loop;
 }
 
@@ -226,57 +276,68 @@ std::unordered_map<u32, u32> precedence = {
 nyla::aexpr* nyla::parser::parse_factor() {
 	switch (m_current->tag) {
 	case TK_VALUE_INT: {
-		nyla::anumber* number = make_node<nyla::anumber>(AST_VALUE_INT, m_current);
+		nyla::anumber* number = make_node<nyla::anumber>(AST_VALUE_INT, m_current, m_current);
 		number->value_int = dynamic_cast<nyla::num_token*>(m_current)->value_int;
 		next_token(); // Consuming the number token.
 		return number;
 	}
 	case TK_VALUE_FLOAT: {
-		nyla::anumber* number = make_node<nyla::anumber>(AST_VALUE_FLOAT, m_current);
+		nyla::anumber* number = make_node<nyla::anumber>(AST_VALUE_FLOAT, m_current, m_current);
 		number->value_float = dynamic_cast<nyla::num_token*>(m_current)->value_float;
 		next_token(); // Consuming the number token.
 		return number;
 	}
 	case TK_VALUE_DOUBLE: {
-		nyla::anumber* number = make_node<nyla::anumber>(AST_VALUE_DOUBLE, m_current);
+		nyla::anumber* number = make_node<nyla::anumber>(AST_VALUE_DOUBLE, m_current, m_current);
 		number->value_double = dynamic_cast<nyla::num_token*>(m_current)->value_double;
 		next_token(); // Consuming the number token.
 		return number;
+	}
+	case TK_VALUE_BOOL: {
+		nyla::abool* boolean = make_node<nyla::abool>(AST_VALUE_BOOL, m_current, m_current);
+		boolean->tof = dynamic_cast<nyla::bool_token*>(m_current)->tof;
+		next_token(); // Consuming the bool token.
+		return boolean;
 	}
 	case TK_TYPE_BYTE:  case TK_TYPE_SHORT:
 	case TK_TYPE_INT:   case TK_TYPE_LONG:
 	case TK_TYPE_FLOAT: case TK_TYPE_DOUBLE:
 	case TK_TYPE_BOOL:  case TK_TYPE_VOID: {
 		// Type casting
-		nyla::atype_cast* type_cast = make_node<nyla::atype_cast>(AST_TYPE_CAST, m_current);
+		nyla::atype_cast* type_cast = make_node<nyla::atype_cast>(AST_TYPE_CAST, m_current, m_current);
 		type_cast->checked_type = parse_type();
 		match('(');
-		type_cast->value = parse_expression();
+		type_cast->value = parse_expression(false);
+		if (m_error_recovery) return type_cast;
 		match(')');
 		return type_cast;
 	}
 	case TK_IDENTIFIER: {
+		nyla::token* identifier_token = m_current;
 		nyla::name name = parse_identifier();
 		switch (m_current->tag) { 
 		case  '(':
-			// TODO: function call
-			break;
+			return parse_function_call(name, identifier_token);
 		case '.':
 			// TODO: dot reference operator
 			break;
 		default:
 			break;
 		}
-		nyla::avariable* variable = make_node<nyla::avariable>(AST_VARIABLE, m_current);
+		nyla::avariable* variable = make_node<nyla::avariable>(AST_VARIABLE,
+			identifier_token, identifier_token);
 		variable->name = name;
 		// The type is determined during symantic analysis.
 		return variable;
 	}
 	default: {
-		nyla::g_log->error(ERR_EXPECTED_FACTOR, m_lexer.get_line_num(),
-			error_data::make_token_tag_load(m_current->tag));
+		produce_error(ERR_EXPECTED_FACTOR,
+			error_data::make_token_tag_load(m_current->tag),
+			m_current, m_current
+		);
 		next_token(); // consuming the unknown factor
-		return nullptr;
+		m_error_recovery = true;
+		return make_node<nyla::err_expr>(AST_ERROR, nullptr, nullptr);
 	}
 	}
 }
@@ -285,8 +346,8 @@ nyla::aexpr* parser::on_binary_op(nyla::token* op_token,
 	                              nyla::aexpr* lhs, nyla::aexpr* rhs) {
 	// Subdivides an equal + operator into seperate nodes.
 	static auto equal_and_op_apply = [this, op_token](u32 op, nyla::aexpr* lhs, nyla::aexpr* rhs) -> nyla::abinary_op* {
-		nyla::abinary_op* eq_op = make_node<nyla::abinary_op>(AST_BINARY_OP, op_token);
-		nyla::abinary_op* op_op = make_node<nyla::abinary_op>(AST_BINARY_OP, op_token);
+		nyla::abinary_op* eq_op = make_node<nyla::abinary_op>(AST_BINARY_OP, lhs->et, rhs->et);
+		nyla::abinary_op* op_op = make_node<nyla::abinary_op>(AST_BINARY_OP, lhs->et, rhs->et);
 		eq_op->op  = '=';
 		op_op->op  = op;
 		op_op->lhs = lhs;
@@ -303,7 +364,7 @@ nyla::aexpr* parser::on_binary_op(nyla::token* op_token,
 	default: {
 		// Letting folding occure via LLVM folding operation. Could handle it here
 		// which may result in faster compilation.
-		nyla::abinary_op* binary_op = make_node<nyla::abinary_op>(AST_BINARY_OP, op_token);
+		nyla::abinary_op* binary_op = make_node<nyla::abinary_op>(AST_BINARY_OP, lhs->et, rhs->et);
 		binary_op->lhs = lhs;
 		binary_op->rhs = rhs;
 		binary_op->op = op_token->tag;
@@ -312,12 +373,18 @@ nyla::aexpr* parser::on_binary_op(nyla::token* op_token,
 	}
 }
 
-nyla::aexpr* parser::parse_expression() {
-	return parse_expression(parse_factor());
+nyla::aexpr* parser::parse_expression(bool undo_recovery) {
+	return parse_expression(parse_factor(), undo_recovery);
 }
 
-nyla::aexpr* parser::parse_expression(nyla::aexpr* lhs) {
+nyla::aexpr* parser::parse_expression(nyla::aexpr* lhs, bool undo_recovery) {
 	
+	if (m_error_recovery) {
+		expression_recovery();
+		if (undo_recovery)  m_error_recovery = false;
+		return make_node<nyla::err_expr>(AST_ERROR, nullptr, nullptr);
+	}
+
 	nyla::token* op = m_current;
 	nyla::token* next_op;
 
@@ -331,6 +398,11 @@ nyla::aexpr* parser::parse_expression(nyla::aexpr* lhs) {
 		next_token(); // Consuming the operator.
 	
 		nyla::aexpr* rhs = parse_factor();
+		if (m_error_recovery) {
+			expression_recovery();
+			if (undo_recovery)  m_error_recovery = false;
+			return make_node<nyla::err_expr>(AST_ERROR, nullptr, nullptr);
+		}
 		
 		next_op = m_current;
 		bool more_operators = binary_ops_set.find(next_op->tag) != binary_ops_set.end();
@@ -371,6 +443,28 @@ nyla::aexpr* parser::parse_expression(nyla::aexpr* lhs) {
 	return lhs;
 }
 
+nyla::afunction_call* parser::parse_function_call(nyla::name& name, nyla::token* start_token) {
+	nyla::afunction_call* function_call = make_node<nyla::afunction_call>(
+		AST_FUNCTION_CALL, start_token, start_token);
+	function_call->name = name;
+	match('(');
+	if (m_current->tag != ')') {
+		bool more_expressions = false;
+		do {
+			function_call->parameter_values.push_back(
+				parse_expression(false)
+			);
+
+			more_expressions = m_current->tag == ',';
+			if (more_expressions) {
+				next_token(); // Consuming ,
+			}
+		} while (more_expressions);
+	}
+	match(')');
+	return function_call;
+}
+
 nyla::token* parser::peek_token(u32 n) {
 	if (n == 0) {
 		assert(!"There is no reason to peek a single token");
@@ -388,16 +482,20 @@ void parser::next_token() {
 	} else {
 		m_current = m_lexer.next_token();
 	}
+	m_processed_tokens.push_back(m_current);
 }
 
-void nyla::parser::match(u32 token_tag, bool consume) {
+bool nyla::parser::match(u32 token_tag, bool consume) {
 	if (m_current->tag == token_tag) {
 		if (consume) {
 			next_token();
 		}
+		return true;
 	} else {
-		nyla::g_log->error(ERR_EXPECTED_TOKEN, m_lexer.get_line_num(),
-			expected_token_data::make_expect_tk_tag(token_tag, m_current->tag));
+		produce_error(ERR_EXPECTED_TOKEN,
+			expected_token_data::make_expect_tk_tag(token_tag, m_current),
+			look_back(1), look_back(1));
+		return false;
 	}
 }
 
@@ -406,5 +504,37 @@ void parser::match_semis() {
 	while (m_current->tag == ';') {
 		next_token(); // Consuming any additional semis.
 	}
+}
+
+void nyla::parser::expression_recovery() {
+	// Eating tokens till we find something sensical that
+	// could begin another statement.
+	while (true) {
+		switch (m_current->tag) {
+		case ';':
+		case TK_EOF:
+		case '}':
+		case TK_FOR:
+		case TK_IF:
+		case TK_WHILE:
+		case TK_SWITCH:
+			return;
+		default:
+			next_token();
+		}
+	}
+}
+
+nyla::token* parser::look_back(s32 n) {
+	s32 back = m_processed_tokens.size() - n - 1;
+	if (back < 0) {
+		return m_current;
+	}
+	return m_processed_tokens[back];
+}
+
+void parser::produce_error(error_tag tag, error_data* data,
+	                             nyla::token* start_token, nyla::token* end_token) {
+	m_log.error(tag, data, start_token, end_token);
 }
 

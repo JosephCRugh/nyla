@@ -67,6 +67,39 @@ bool nyla::write_obj_file(c_string fname) {
 	return true;
 }
 
+void llvm_generator::gen_file_unit(nyla::afile_unit* file_unit, bool print_functions) {
+	// Seperating generation of the function declaration
+	// out so that the function exist for use later.
+	std::vector<llvm::Function*> ll_functions;
+	for (nyla::afunction* function : file_unit->functions) {
+		gen_function(function);
+	}
+
+	u32 index = 0;
+	for (nyla::afunction* function : file_unit->functions) {
+		llvm::Function* ll_function = function->ll_function;
+		m_bb = &ll_function->getEntryBlock();
+		nyla::llvm_builder->SetInsertPoint(m_bb);
+		m_ll_function = ll_function;
+
+		nyla::afunction* function = file_unit->functions[index];
+
+		// scope may be nullptr if all that was parsed was
+		// a function declaration.
+		if (function->scope != nullptr) {
+			for (nyla::aexpr* stmt : function->scope->stmts) {
+				gen_expression(stmt);
+			}
+		}
+
+		if (print_functions) {
+			ll_function->print(llvm::errs());
+		}
+
+		++index;
+	}
+}
+
 llvm::Function* llvm_generator::gen_function(nyla::afunction* function) {
 	llvm::Type* ll_return_type = gen_type(function->return_type);
 
@@ -93,18 +126,26 @@ llvm::Function* llvm_generator::gen_function(nyla::afunction* function) {
 	// The Main block for the function.
 	llvm::BasicBlock* ll_basic_block = llvm::BasicBlock::Create(*nyla::llvm_context, "function block", ll_function);
 	nyla::llvm_builder->SetInsertPoint(ll_basic_block);
-
 	m_bb = ll_basic_block;
-	m_ll_function = ll_function;
-	// scope may be nullptr if all that was parsed was
-	// a function declaration.
-	if (function->scope != nullptr) {
-		for (nyla::aexpr* stmt : function->scope->stmts) {
-			gen_expression(stmt);
-		}
+
+	// Allocating memory for the parameters
+	param_index = 0;
+	for (auto& llvm_param : ll_function->args()) {
+		llvm::AllocaInst* var_alloca = gen_alloca(function->parameters[param_index++]->variable);
+		nyla::llvm_builder->CreateStore(&llvm_param, var_alloca); // Storing the incoming value
 	}
 
+	function->ll_function = ll_function;
 	return ll_function;
+}
+
+llvm::Value* nyla::llvm_generator::gen_function_call(nyla::afunction_call* function_call) {
+	llvm::Function* ll_callee = function_call->called_function->ll_function;
+	std::vector<llvm::Value*> ll_parameter_values;
+	for (nyla::aexpr* parameter_value : function_call->parameter_values) {
+		ll_parameter_values.push_back(gen_expression(parameter_value));
+	}
+	return nyla::llvm_builder->CreateCall(ll_callee, ll_parameter_values, "callt");
 }
 
 llvm::Type* llvm_generator::gen_type(nyla::type* type) {
@@ -147,6 +188,8 @@ llvm::Value* llvm_generator::gen_expression(nyla::aexpr* expr) {
 		return gen_for_loop(dynamic_cast<nyla::afor_loop*>(expr));
 	case AST_TYPE_CAST:
 		return gen_type_cast(dynamic_cast<nyla::atype_cast*>(expr));
+	case AST_FUNCTION_CALL:
+		return gen_function_call(dynamic_cast<nyla::afunction_call*>(expr));
 	}
 	return nullptr;
 }
@@ -231,13 +274,7 @@ llvm::Value* llvm_generator::gen_binary_op(nyla::abinary_op* binary_op) {
 }
 
 llvm::Value* llvm_generator::gen_variable_decl(nyla::avariable_decl* variable_decl) {
-	llvm::IRBuilder<> tmp_builder(m_bb, m_bb->begin());
-	llvm::AllocaInst* var_alloca;
-	var_alloca = tmp_builder.CreateAlloca(
-		gen_type(variable_decl->variable->checked_type),
-		nullptr,                                    // Array size
-		variable_decl->variable->name.c_str());
-	m_sym_table.store_alloca(variable_decl->variable, var_alloca);
+	llvm::Value* var_alloca = gen_alloca(variable_decl->variable);
 	if (variable_decl->assignment != nullptr) {
 		gen_expression(variable_decl->assignment);
 	}
@@ -273,9 +310,7 @@ llvm::Value* llvm_generator::gen_for_loop(nyla::afor_loop* for_loop) {
 	for (nyla::aexpr* stmt : for_loop->scope->stmts) {
 		gen_expression(stmt);
 	}
-	// Post loop expression
-	gen_expression(for_loop->post);
-
+	
 	// Unconditional branch back to the condition
 	nyla::llvm_builder->CreateBr(ll_cond_bb);
 
@@ -333,4 +368,15 @@ llvm::Value* llvm_generator::gen_type_cast(nyla::atype_cast* type_cast) {
 		}
 	}
 	return nullptr;
+}
+
+llvm::AllocaInst* llvm_generator::gen_alloca(nyla::avariable* variable) {
+	llvm::IRBuilder<> tmp_builder(m_bb, m_bb->begin());
+	llvm::AllocaInst* var_alloca;
+	var_alloca = tmp_builder.CreateAlloca(
+		gen_type(variable->checked_type),
+		nullptr,                                    // Array size
+		variable->name.c_str());
+	m_sym_table.store_alloca(variable, var_alloca);
+	return var_alloca;
 }

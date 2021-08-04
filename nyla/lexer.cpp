@@ -1,5 +1,4 @@
 #include "lexer.h"
-#include "log.h"
 
 #include <unordered_map>
 #include <assert.h>
@@ -49,36 +48,13 @@ constexpr bool eol_set[256] = {
     0,1
 };
 
-std::unordered_map<nyla::name, nyla::token_tag,
-	nyla::name::hash_gen> reserved_words;
-
-void nyla::setup_lexer() {
-	reserved_words = {
-		{ nyla::name::make("byte")  , nyla::TK_TYPE_BYTE   },
-		{ nyla::name::make("short") , nyla::TK_TYPE_SHORT  },
-		{ nyla::name::make("int")   , nyla::TK_TYPE_INT    },
-		{ nyla::name::make("long")  , nyla::TK_TYPE_LONG   },
-		{ nyla::name::make("float") , nyla::TK_TYPE_FLOAT  },
-		{ nyla::name::make("double"), nyla::TK_TYPE_DOUBLE },
-		{ nyla::name::make("bool")  , nyla::TK_TYPE_BOOL   },
-		{ nyla::name::make("void")  , nyla::TK_TYPE_VOID   },
-		{ nyla::name::make("for")   , nyla::TK_FOR         },
-		{ nyla::name::make("while") , nyla::TK_WHILE       },
-		{ nyla::name::make("do")    , nyla::TK_DO          },
-		{ nyla::name::make("if")    , nyla::TK_IF          },
-		{ nyla::name::make("else")  , nyla::TK_ELSE        },
-		{ nyla::name::make("switch"), nyla::TK_SWITCH      },
-		{ nyla::name::make("return"), nyla::TK_RETURN      },
-	};
-}
-
 nyla::word_token* nyla::get_reserved_word_token(c_string name) {
 	nyla::name n = nyla::name::make(name);
 	return new nyla::word_token(reserved_words[n], n);
 }
 
-lexer::lexer(nyla::reader& reader) : m_reader(reader) {
-	
+lexer::lexer(nyla::reader& reader, nyla::log& log)
+	: m_reader(reader), m_log(log) {
 }
 
 void nyla::lexer::consume_ignored() {
@@ -126,7 +102,7 @@ void lexer::on_new_line() {
 
 nyla::token* lexer::next_token() {
 	consume_ignored();
-	assert(!whitespace_set[m_reader.cur_char()] && "Character in whitespace_set not consumed.");
+	m_start_pos = m_reader.position();
 	switch (m_reader.cur_char()) {
 	case 'a': case 'b': case 'c': case 'd': case 'e':
 	case 'f': case 'g': case 'h': case 'i': case 'j':
@@ -151,26 +127,53 @@ nyla::token* lexer::next_token() {
 	case '[': case ']':
 		return next_symbol();
 	case '\0': case EOF:
-		return make_token<nyla::default_token>(TK_EOF);
+		return make_token<nyla::default_token>(TK_EOF, m_start_pos, m_start_pos);
 	default: {
-		g_log->error(ERR_UNKNOWN_CHAR, m_line_num, error_data::make_char_load(m_reader.cur_char()));
+		nyla::token* err_token = make_token<nyla::default_token>(TK_UNKNOWN, m_start_pos);
+		err_token->epos = m_start_pos + 1;
+		produce_error(ERR_UNKNOWN_CHAR,
+			error_data::make_char_load(m_reader.cur_char()),  err_token);
 		m_reader.next_char(); // Reading the unknown character.
-		return make_token<nyla::default_token>(TK_UNKNOWN);
+		return err_token;
 	}
 	}
 }
 
-nyla::word_token* lexer::next_word() {
-	nyla::word_token* word_token = make_token<nyla::word_token>(TK_IDENTIFIER);
+void nyla::lexer::print_tokens() {
+	nyla::token* token;
+	while ((token = next_token())->tag != TK_EOF) {
+		std::cout << token << std::endl;
+		delete token;
+	}
+}
+
+nyla::token* lexer::next_word() {
 	nyla::name name;
 	c8 ch = m_reader.cur_char();
 	while (identifier_set[ch]) {
 		name.append(ch);
 		ch = m_reader.next_char();
 	}
+
+	
 	if (name.size() > 0xFF) {
 		// TODO: report error about the name being too long
 	}
+
+	if (name == nyla::bool_true_word) {
+		nyla::bool_token* bool_token = make_token<nyla::bool_token>(TK_VALUE_BOOL, m_start_pos);
+		bool_token->epos = m_reader.position();
+		bool_token->tof = true;
+		return bool_token;
+	}
+	if (name == nyla::bool_false_word) {
+		nyla::bool_token* bool_token = make_token<nyla::bool_token>(TK_VALUE_BOOL, m_start_pos);
+		bool_token->epos = m_reader.position();
+		bool_token->tof = false;
+		return bool_token;
+	}
+	nyla::word_token* word_token = make_token<nyla::word_token>(TK_IDENTIFIER, m_start_pos);
+	word_token->epos = m_reader.position();
 
 	auto it = reserved_words.find(name);
 	if (it != reserved_words.end()) {
@@ -190,36 +193,36 @@ nyla::token* lexer::next_symbol() {
 		ch = m_reader.next_char(); // consuming +
 		if (ch == '=') {
 			m_reader.next_char(); // consuming =
-			return make_token<nyla::default_token>(TK_PLUS_EQ);
+			return make_token<nyla::default_token>(TK_PLUS_EQ, m_start_pos, m_start_pos + 2);
 		}
-		return make_token<nyla::default_token>('+');
+		return make_token<nyla::default_token>('+', m_start_pos, m_start_pos + 1);
 	}
 	case '-': {
 		ch = m_reader.next_char(); // consuming -
 		if (ch == '=') {
 			m_reader.next_char(); // consuming =
-			return make_token<nyla::default_token>(TK_MINUS_EQ);
+			return make_token<nyla::default_token>(TK_MINUS_EQ, m_start_pos, m_start_pos + 2);
 		}
-		return make_token<nyla::default_token>('-');
+		return make_token<nyla::default_token>('-', m_start_pos, m_start_pos + 1);
 	}
 	case '/': {
 		ch = m_reader.next_char(); // consuming /
 		if (ch == '=') {
 			m_reader.next_char(); // consuming =
-			return make_token<nyla::default_token>(TK_DIV_EQ);
+			return make_token<nyla::default_token>(TK_DIV_EQ, m_start_pos, m_start_pos + 2);
 		}
-		return make_token<nyla::default_token>('/');
+		return make_token<nyla::default_token>('/', m_start_pos, m_start_pos + 1);
 	}
 	case '*': {
 		ch = m_reader.next_char(); // consuming *
 		if (ch == '=') {
 			m_reader.next_char(); // consuming =
-			return make_token<nyla::default_token>(TK_MUL_EQ);
+			return make_token<nyla::default_token>(TK_MUL_EQ, m_start_pos, m_start_pos + 2);
 		}
-		return make_token<nyla::default_token>('*');
+		return make_token<nyla::default_token>('*', m_start_pos, m_start_pos + 1);
 	}
 	default:
-		nyla::token* symbol_token = make_token<nyla::default_token>(ch);
+		nyla::token* symbol_token = make_token<nyla::default_token>(ch, m_start_pos, m_start_pos + 1);
 		m_reader.next_char(); // Consuming the symbol.
 		return symbol_token;
 	}
@@ -236,18 +239,32 @@ std::tuple<u32, u32> lexer::read_unsigned_digits() {
 	return std::tuple<u32, u32>{ start, end };
 }
 
+void lexer::produce_error(error_tag tag, error_data* data, nyla::token* token) {
+	m_log.error(tag, data, token, token);
+}
+
 nyla::num_token* lexer::next_integer(const std::tuple<u32, u32>& digits_before_dot) {
-	u64 int_value = calculate_int_value(digits_before_dot);
+	std::tuple<u64, bool> int_value = calculate_int_value(digits_before_dot);
+
+	nyla::num_token* num_token = nyla::num_token::make_int(std::get<0>(int_value));
+	num_token->line_num = m_line_num;
+	num_token->spos     = m_start_pos;
+	num_token->epos     = m_reader.position();
 
 	// Modifies the type. Ex. u converts to unsigned
 	c8 unit_type = m_reader.cur_char();
 	// TODO: modifiers
 
-	return nyla::num_token::make_int(int_value);
+	if (std::get<1>(int_value)) {
+		produce_error(ERR_INT_TOO_LARGE,
+			error_data::make_str_literal_load(m_reader.from_range(digits_before_dot).c_str()),
+			num_token);
+	}
+
+	return num_token;
 }
 
-u64 lexer::calculate_int_value(const std::tuple<u32, u32>& digits)
-{
+std::tuple<u64, bool> lexer::calculate_int_value(const std::tuple<u32, u32>& digits) {
 	u64 int_value = 0;
 	u64 prev_value = -1;
 	bool too_large = false;
@@ -271,36 +288,50 @@ u64 lexer::calculate_int_value(const std::tuple<u32, u32>& digits)
 			}
 		}
 	}
-	
-	if (too_large) {
-		g_log->error(ERR_INT_TOO_LARGE, m_line_num,
-			     error_data::make_str_literal_load(m_reader.from_range(digits).c_str()));
-	}
 
-	return int_value;
+	return std::tuple<u64, bool>{ int_value, too_large };
 }
 
-double nyla::lexer::calculate_float(const std::tuple<u32, u32>& digits_before_dot,
-	                                const std::tuple<u32, u32>& fraction_digits,
-	                                const std::tuple<u32, u32>& exponent_digits,
-	                                c8 exponent_sign) {
-	
-	s64 unsigned_expoenent_value = calculate_int_value(exponent_digits);
+nyla::num_token* lexer::next_float(const std::tuple<u32, u32>& digits_before_dot) {
+	m_reader.next_char(); // Consuming .
+	std::tuple<u32, u32> fraction_digits = read_unsigned_digits();
+	std::tuple<u32, u32> exponent_digits = { 0, 0 };
+	c8 exponent_sign = '+';
 
-	s64 exponent_value = calculate_int_value(exponent_digits);
+	// Exponent symbol     4202.412E+34
+	if (m_reader.cur_char() == 'E') {
+		c8 possible_sign = m_reader.next_char();
+		if (possible_sign == '+' || possible_sign == '-') {
+			exponent_sign = possible_sign;
+			m_reader.next_char(); // Consuming + or -
+		}
+
+		exponent_digits = read_unsigned_digits();
+	}
+
+	std::tuple<u64, bool> unsigned_exponent_calc = calculate_int_value(exponent_digits);
+	bool exponent_too_large = std::get<1>(unsigned_exponent_calc);
+	s64 exponent_value = 0;
+	if (std::get<0>(unsigned_exponent_calc) > 0x7FFFFFFFFFFFFFFF) {
+		exponent_too_large = true;
+		exponent_value = 0x7FFFFFFFFFFFFFFF;
+	} else {
+		exponent_value = std::get<0>(unsigned_exponent_calc);
+	}
+
 	if (exponent_sign == '-') {
 		exponent_value = -exponent_value;
 	}
 
 	u32 fraction_length = std::get<1>(fraction_digits) - std::get<0>(fraction_digits);
 	u32 whole_length = std::get<1>(digits_before_dot) - std::get<0>(digits_before_dot);
-	
+
 	// Since the whole digits and fraction digits
 	// will be processed as if they are after the
 	// decimal the value will have to be shifted back
 	// the amount of digits that were shifted past the decimal.
 	exponent_value -= fraction_length;
-	
+
 	u32 index = 0;
 	double value = 0.0;
 	while (index < whole_length) {
@@ -319,30 +350,27 @@ double nyla::lexer::calculate_float(const std::tuple<u32, u32>& digits_before_do
 		value *= pow(10.0, exponent_value);
 	}
 
-	return value;
-}
+	nyla::num_token* float_token;
+	if (m_reader.cur_char() == 'f') {
+		float_token = nyla::num_token::make_float((float)value);
+		m_reader.next_char();
+	} else if (m_reader.cur_char() == 'd') {
+		float_token = nyla::num_token::make_double(value);
+		m_reader.next_char();
+	} else {
+		float_token = nyla::num_token::make_double(value);
+	}
+	float_token->line_num = m_line_num;
+	float_token->spos = m_start_pos;
+	float_token->epos = m_reader.position();
 
-nyla::num_token* nyla::lexer::next_float(const std::tuple<u32, u32>& digits_before_dot) {
-	m_reader.next_char(); // Consuming .
-	std::tuple<u32, u32> fraction_digits = read_unsigned_digits();
-	std::tuple<u32, u32> exponent_digits = { 0, 0 };
-	c8 exponent_sign = '+';
-
-	// Exponent symbol     4202.412E+34
-	if (m_reader.cur_char() == 'E') {
-		c8 possible_sign = m_reader.next_char();
-		if (possible_sign == '+' || possible_sign == '-') {
-			exponent_sign = possible_sign;
-			m_reader.next_char(); // Consuming + or -
-		}
-
-		exponent_digits = read_unsigned_digits();
+	if (exponent_too_large) {
+		produce_error(ERR_EXPONENT_TOO_LARGE,
+			error_data::make_str_literal_load(m_reader.from_range(exponent_digits).c_str()),
+				float_token);
 	}
 
-	double float_value = calculate_float(digits_before_dot, fraction_digits,
-		                                 exponent_digits, exponent_sign);
-
-	return nyla::num_token::make_double(float_value);
+	return float_token;
 }
 
 nyla::num_token* lexer::next_number() {
@@ -354,7 +382,6 @@ nyla::num_token* lexer::next_number() {
 	} else {
 		num_token = next_integer(digits_before_dot);
 	}
-	num_token->line_num = m_line_num;
 	return num_token;
 }
 

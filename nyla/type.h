@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types_ext.h"
+#include "token.h"
 #include <iostream>
 
 namespace nyla {
@@ -21,6 +22,8 @@ namespace nyla {
 
 	struct type {
 		type_tag tag;
+		nyla::token* st = nullptr;
+		nyla::token* et = nullptr;
 		
 		type() {}
 		type(type_tag _tag) : tag(_tag) {}
