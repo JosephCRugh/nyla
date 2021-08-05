@@ -49,6 +49,8 @@ namespace nyla {
 
 		nyla::num_token* next_number();
 
+		nyla::string_token* next_string();
+
 		nyla::num_token* next_float(const std::tuple<u32, u32>& digits_before_dot);
 
 		nyla::num_token* next_integer(const std::tuple<u32, u32>& digits_before_dot);

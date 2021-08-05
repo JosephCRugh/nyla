@@ -21,18 +21,18 @@ namespace nyla {
 		/// 
 		/// function_decl = type identifier '(' variable_decl* ')'
 		/// </summary>
-		nyla::afunction* parse_function_decl();
+		nyla::afunction* parse_function_decl(bool make_new_scope = true);
 
 		/// <summary>
 		/// function = function_decl '{' function_stmt* '}'
 		/// </summary>
 		nyla::afunction* parse_function();
 
+		nyla::afunction* parse_external_function();
+
 		nyla::type* parse_type();
 
 		nyla::name parse_identifier();
-
-		nyla::ascope* parse_scope();
 
 		/// <summary>
 		/// Parses a type followed by a variable name.
@@ -40,12 +40,12 @@ namespace nyla {
 		/// variable_decl = type identifier
 		/// </summary>
 		/// <param name="type">The type of the variable read beforehand</param>
-		nyla::avariable_decl* parse_variable_decl(nyla::type* type);
+		nyla::avariable_decl* parse_variable_decl(nyla::type* type, bool has_scope = true);
 
 		/// <summary>
 		/// Parses a type followed by a variable name.
 		/// </summary>
-		nyla::avariable_decl* parse_variable_decl();
+		nyla::avariable_decl* parse_variable_decl(bool has_scope = true);
 
 		/// <summary>
 		/// Parses a list of variable declarations and possible
@@ -67,6 +67,8 @@ namespace nyla {
 		/// </summary>
 		nyla::aexpr* parse_for_loop();
 
+		nyla::aexpr* parse_unary();
+
 		nyla::aexpr* parse_factor();
 
 		nyla::aexpr* on_binary_op(nyla::token* op_token,
@@ -79,6 +81,8 @@ namespace nyla {
 		nyla::afunction_call* parse_function_call(nyla::name& name, nyla::token* start_token);
 
 		std::vector<nyla::token*> get_processed_tokens() { return m_processed_tokens; }
+
+		void parse_dll_import();
 
 	private:
 

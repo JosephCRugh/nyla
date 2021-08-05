@@ -16,6 +16,9 @@ namespace nyla {
 
 		__TK_START_OF_KEYWORDS = TK_IDENTIFIER + 1,
 
+		TK_DLLIMPORT,
+		TK_EXTERNAL,
+
 		// Types
 
 		TK_TYPE_BYTE,
@@ -26,6 +29,7 @@ namespace nyla {
 		TK_TYPE_DOUBLE,
 		TK_TYPE_BOOL,
 		TK_TYPE_VOID,
+		TK_TYPE_CHAR16,
 
 		// Control Flow
 
@@ -46,6 +50,7 @@ namespace nyla {
 		TK_VALUE_FLOAT,
 		TK_VALUE_DOUBLE,
 		TK_VALUE_BOOL,
+		TK_STRING_VALUE,
 
 		// === Symbols === \\
 
@@ -195,6 +200,26 @@ namespace nyla {
 			if (tag != o.tag) return false;
 			const bool_token* bt = dynamic_cast<const bool_token*>(&o);
 			return tof == bt->tof;
+		}
+	};
+
+	struct string_token : public token {
+		std::string lit;
+
+		string_token(u32 _tag) : token(_tag) {}
+		string_token(u32 _tag, std::string& _lit)
+			: token(_tag), lit(_lit) {}
+
+		virtual ~string_token() {}
+
+		virtual std::string to_string() const override {
+			return lit;
+		}
+
+		bool equals(const nyla::token& o) const override {
+			if (tag != o.tag) return false;
+			const string_token* st = dynamic_cast<const string_token*>(&o);
+			return st->lit == lit;
 		}
 	};
 }

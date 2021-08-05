@@ -18,7 +18,9 @@ namespace nyla {
 		AST_VALUE_FLOAT,
 		AST_VALUE_DOUBLE,
 		AST_VALUE_BOOL,
+		AST_VALUE_STRING,
 		AST_BINARY_OP,
+		AST_UNARY_OP,
 		AST_FOR_LOOP,
 		AST_TYPE_CAST,
 		AST_FILE_UNIT,
@@ -100,7 +102,11 @@ namespace nyla {
 	struct ascope : public ast_node {
 		virtual ~ascope() {}
 		std::vector<nyla::aexpr*> stmts;
-		nyla::ascope*             parent;
+		nyla::ascope*             parent = nullptr;
+		// Variables declared by name in the scope
+		std::unordered_map<nyla::name,
+			nyla::avariable*, nyla::name::hash_gen> variables;
+
 		virtual void print(std::ostream& os, u32 depth) const override {
 			os << indent(depth) << "scope" << std::endl;
 			for (nyla::aexpr* stmt : stmts) {
@@ -152,12 +158,30 @@ namespace nyla {
 		}
 	};
 
-	struct abool : aexpr {
+	struct abool : public aexpr {
 		virtual ~abool() {}
 		bool tof;
 		virtual void print(std::ostream& os, u32 depth) const override {
 			os << indent(depth);
 			if (tof) os << "true"; else os << "false";
+		}
+	};
+
+	struct astring : public aexpr {
+		virtual ~astring() {}
+		std::string lit;
+		virtual void print(std::ostream& os, u32 depth) const override {
+			os << indent(depth) << lit;
+		}
+	};
+
+	struct aunary_op : public aexpr {
+		virtual ~aunary_op() {}
+		u32 op;
+		nyla::aexpr* factor;
+		virtual void print(std::ostream& os, u32 depth) const override {
+			os << indent(depth) << "unary_op: " << nyla::token_tag_to_string(op) << std::endl;
+			factor->print(os, depth + 1);
 		}
 	};
 
@@ -179,12 +203,17 @@ namespace nyla {
 		nyla::type*                        return_type;
 		nyla::name                         name;
 		std::vector<nyla::avariable_decl*> parameters;
-		nyla::ascope*                      scope;
+		nyla::ascope*                      scope = nullptr;
 		llvm::Function*                    ll_function; // Needed for function calls
+
+		bool is_external = false; // Indicates if it is an external to a C
+		                          // style library such as in a DLL.
 		virtual void print(std::ostream& os, u32 depth) const override {
 			os << std::string(depth * 4, ' ');
 			os << "function: " << name << std::endl;
-			scope->print(os, depth + 1);
+			if (scope != nullptr) {
+				scope->print(os, depth + 1);
+			}
 		}
 	};
 

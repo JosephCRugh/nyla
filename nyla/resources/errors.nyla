@@ -14,6 +14,11 @@ int main() {
 	double r = 214;
 	double mm =  312 -3 + 412.0 + true;
 
+	y = 44;
+
+	decl_test = 44;
+	int decl_test;
+
 	for int i = 0; i / 4; i += 1 {
 	
 	}

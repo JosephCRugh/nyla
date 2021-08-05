@@ -126,6 +126,8 @@ nyla::token* lexer::next_token() {
 	case '(': case ')':
 	case '[': case ']':
 		return next_symbol();
+	case '"':
+		return next_string();
 	case '\0': case EOF:
 		return make_token<nyla::default_token>(TK_EOF, m_start_pos, m_start_pos);
 	default: {
@@ -385,3 +387,32 @@ nyla::num_token* lexer::next_number() {
 	return num_token;
 }
 
+nyla::string_token* nyla::lexer::next_string() {
+	c8 ch = m_reader.next_char(); // Consuming "
+	std::string lit = "";
+	while (ch != '"' && ch != '\0') {
+		switch (ch) {
+		case '\\':
+			ch = m_reader.next_char();
+			if (ch == 'n') {
+				lit += '\n';
+			}
+			break;
+		default:
+			lit += ch;
+			break;
+		}
+		ch = m_reader.next_char();
+	}
+
+	if (ch == '"') {
+		m_reader.next_char(); // Consuming "
+	} else {
+		// TODO: report error.
+	}
+
+	nyla::string_token* string_token =
+		make_token<nyla::string_token>(TK_STRING_VALUE, m_start_pos, m_reader.position());
+	string_token->lit = lit;
+	return string_token;
+}

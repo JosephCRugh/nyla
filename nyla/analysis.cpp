@@ -9,15 +9,18 @@ using namespace nyla;
 
 void analysis::type_check_file_unit(nyla::afile_unit* file_unit) {
 	for (nyla::afunction* function : file_unit->functions) {
-		type_check_function(function);
+		if (!function->is_external)
+			type_check_function(function);
 	}
 }
 
 void analysis::type_check_function(nyla::afunction* function) {
 	m_function = function;
+	m_scope = function->scope;
 	for (nyla::aexpr* expr : function->scope->stmts) {
 		type_check_expression(expr);
 	}
+	m_scope = nullptr;
 	m_function = nullptr;
 }
 
@@ -64,8 +67,14 @@ void analysis::type_check_expression(nyla::aexpr* expr) {
 	case AST_VALUE_BOOL:
 		expr->checked_type = nyla::type::get_bool();
 		break;
+	case AST_VALUE_STRING:
+		expr->checked_type = nyla::type::get_string();
+		break;
 	case AST_BINARY_OP:
 		type_check_binary_op(dynamic_cast<nyla::abinary_op*>(expr));
+		break;
+	case AST_UNARY_OP:
+		type_check_unary_op(dynamic_cast<nyla::aunary_op*>(expr));
 		break;
 	case AST_FUNCTION_CALL:
 		type_check_function_call(dynamic_cast<nyla::afunction_call*>(expr));
@@ -190,15 +199,34 @@ void analysis::type_check_binary_op(nyla::abinary_op* binary_op) {
 			}
 		}
 	} else if (binary_op->op == '=') {
-		// At the moment it is very strict and always requires
-		// the types be the same. Should probably allow upcasting
-		if (!is_convertible_to(lhs_checked_type, rhs_checked_type)) {
+		bool found_match = true;
+		if (rhs_checked_type->tag == TYPE_STRING) {
+			switch (lhs_checked_type->tag) {
+			case TYPE_PTR_CHAR16:
+				if (lhs_checked_type->ptr_depth == 1) {
+					binary_op->checked_type = lhs_checked_type;
+					// TODO: Generate an array of 16 bit characters
+					// out of the String so that the llvm generator
+					// generates off of an array instead of the internal
+					// string type.
+					return;
+				}
+				break;
+			}
+			found_match = false;
+		} else {
+			// At the moment it is very strict and always requires
+			// the types be the same. Should probably allow upcasting
+			if (!is_convertible_to(lhs_checked_type, rhs_checked_type)) {
+				found_match = false;
+			}
+			binary_op->checked_type = lhs_checked_type;
+		}
+		if (!found_match) {
 			produce_error(ERR_CANNOT_ASSIGN,
 				type_mismatch_data::make_type_mismatch(lhs_checked_type, rhs_checked_type),
 				binary_op);
-			
 		}
-		binary_op->checked_type = lhs_checked_type;
 	}
 
 	// If it is a comparison operator it
@@ -208,8 +236,29 @@ void analysis::type_check_binary_op(nyla::abinary_op* binary_op) {
 	}
 }
 
+void analysis::type_check_unary_op(nyla::aunary_op* unary_op) {
+	type_check_expression(unary_op->factor);
+
+	if (unary_op->factor->checked_type->tag == TYPE_ERROR) {
+		unary_op->checked_type = nyla::type::get_error();
+		return;
+	}
+
+	if (only_works_on_numbers(unary_op->op)) {
+		if (!unary_op->factor->checked_type->is_number()) {
+			produce_error(ERR_OP_CANNOT_APPLY_TO,
+				op_applies_to_data::make_applies_to(unary_op->op, unary_op->factor->st),
+				unary_op);
+			unary_op->checked_type = nyla::type::get_error();
+			return;
+		}
+		unary_op->checked_type = unary_op->factor->checked_type;
+	}
+}
+
 void analysis::type_check_variable_decl(nyla::avariable_decl* variable_decl) {
-	m_sym_table.store_variable_type(variable_decl->variable);
+	// TODO: if the type is undetermined then it needs to now
+	// be determined here.
 	if (variable_decl->assignment != nullptr) {
 		type_check_expression(variable_decl->assignment);
 	}
@@ -222,15 +271,29 @@ void analysis::type_check_type_cast(nyla::atype_cast* type_cast) {
 void analysis::type_check_variable(nyla::avariable* variable) {
 	// Since the variable was declared previously we simple look up
 	// it's type.
-	variable->checked_type = m_sym_table.get_variable_type(variable);
-	// Possible it was not declared in which case this
-	// TODO: handle this problem
-	if (variable->checked_type == nullptr) {
-		variable->checked_type = nyla::type::get_error(); // Tempory fix
+	nyla::avariable* declared_variable = m_sym_table.get_declared_variable(m_scope, variable);
+	
+	if (declared_variable == nullptr) {
+		produce_error(ERR_UNDECLARED_VARIABLE,
+			error_data::make_str_literal_load(variable->name.c_str()),
+			variable);
+		variable->checked_type = nyla::type::get_error();
+		return;
 	}
+	// Making sure the variable was declared before it was used.
+	if (declared_variable->st->spos > variable->st->spos) {
+		produce_error(ERR_USE_BEFORE_DECLARED_VARIABLE,
+			error_data::make_str_literal_load(variable->name.c_str()),
+			variable);
+		variable->checked_type = nyla::type::get_error();
+		return;
+	}
+
+	variable->checked_type = declared_variable->checked_type;
 }
 
 void nyla::analysis::type_check_for_loop(nyla::afor_loop* for_loop) {
+	m_scope = for_loop->scope;
 	for (nyla::avariable_decl* var_decl : for_loop->declarations) {
 		type_check_expression(var_decl);
 	}
@@ -240,16 +303,17 @@ void nyla::analysis::type_check_for_loop(nyla::afor_loop* for_loop) {
 			produce_error(ERR_EXPECTED_BOOL_COND, nullptr, for_loop->cond);
 		}
 	}
-	for (nyla::aexpr* stmt : for_loop->scope->stmts) {
-		type_check_expression(stmt);
+	for (nyla::aexpr* expr : for_loop->scope->stmts) {
+		type_check_expression(expr);
 	}
+	m_scope = m_scope->parent;
 }
 
 bool analysis::is_convertible_to(nyla::type* from, nyla::type* to) {
 	if (from->tag == TYPE_ERROR || to->tag == TYPE_ERROR) {
 		return true; // Assumed that the error for this has already been handled
 	}
-	return from == to; // This may be too strict.
+	return *from == *to; // This may be too strict.
 }
 
 bool analysis::only_works_on_ints(u32 op) {
@@ -262,7 +326,7 @@ bool analysis::only_works_on_ints(u32 op) {
 bool analysis::only_works_on_numbers(u32 op) {
 	switch (op) {
 	case '+': case '-': case '*': case '/':
-	case '<':
+	case '<': case '>':
 		return true;
 	default:
 		return false;
@@ -271,7 +335,7 @@ bool analysis::only_works_on_numbers(u32 op) {
 
 bool analysis::is_comp_op(u32 op) {
 	switch (op) {
-	case '<':
+	case '<': case '>':
 		return true;
 	default:
 		return false;

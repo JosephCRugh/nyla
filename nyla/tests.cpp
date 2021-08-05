@@ -100,6 +100,12 @@ void run_lexer_tests() {
 		lexer.next_token();
 		check_eq(nyla::ERR_EXPONENT_TOO_LARGE, log.get_last_error_tag(), "Too large error");
 	}
+	{
+		nyla::reader reader("\"Hello!\"");
+		nyla::log log(reader);
+		nyla::lexer lexer(reader, log);
+		check_eq(lexer.next_token(), new nyla::string_token(nyla::TK_STRING_VALUE, std::string("Hello!")));
+	}
 }
 
 #define parser_setup(text)      \
@@ -115,7 +121,7 @@ void function_decl_test(c_string text, nyla::type_tag return_type,
 	const std::vector<c_string>&       param_names
 	) {
 	parser_setup(text)
-	nyla::afunction* function = parser.parse_function_decl();
+	nyla::afunction* function = parser.parse_function_decl(false);
 	check_eq(function->return_type->tag, return_type, "Ret. Type Check");
 	check_eq(function->name, nyla::name::make(fname));                             \
 	assert(param_types.size() == param_names.size()                                \
@@ -167,7 +173,8 @@ std::unordered_map<std::string, int> program_err_codes = {
 				sum = sum * sum;
 				return sum;
 			}()  },
-	{ "func_call.nyla", 7+54 }
+	{ "func_call.nyla", 7+54 },
+	{ "print.nyla", 0 }
 };
 
 void run_llvm_gen_tests() {
@@ -179,6 +186,8 @@ void run_llvm_gen_tests() {
 	nyla::for_files(L"resources/*", [](const std::string& fpath) {
 		// TODO make sure they are .nyla files
 		
+		std::cout << "Attempting to parse: " << fpath << std::endl;
+
 		c8* buffer;
 		ulen buffer_size;
 		nyla::read_file("resources/" + fpath, buffer, buffer_size);
@@ -193,6 +202,8 @@ void run_llvm_gen_tests() {
 		nyla::working_llvm_module = new llvm::Module("My Module", *nyla::llvm_context);
 		nyla::llvm_generator generator;
 		nyla::afile_unit* file_unit = parser.parse_file_unit();
+		std::cout << file_unit << std::endl;
+		
 		analysis.type_check_file_unit(file_unit);
 
 		std::cout << file_unit << std::endl;
@@ -206,10 +217,17 @@ void run_llvm_gen_tests() {
 
 		auto it = program_err_codes.find(fpath);
 		if (it != program_err_codes.end()) {
-			system((std::string("clang++ -O0 ") + out_path + " -o program.exe").c_str());
+			std::string all_dll_import_paths = "";
+			std::vector<std::string> dll_import_paths = sym_table.get_dll_import_paths();
+			for (std::string import_path : dll_import_paths) {
+				all_dll_import_paths += import_path + " ";
+			}
+			std::string options = "";
+			options += "-O0 ";
+			system((std::string("clang++ ") + options + " " + out_path + " -o program.exe ").c_str());
 			int err_code = system("program.exe");
-			
 			check_eq(err_code, it->second, "Error code check");
+			
 		}
 
 		// Cleaning up the tokens to free memory.

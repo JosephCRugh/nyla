@@ -75,14 +75,13 @@ void llvm_generator::gen_file_unit(nyla::afile_unit* file_unit, bool print_funct
 		gen_function(function);
 	}
 
-	u32 index = 0;
 	for (nyla::afunction* function : file_unit->functions) {
 		llvm::Function* ll_function = function->ll_function;
-		m_bb = &ll_function->getEntryBlock();
-		nyla::llvm_builder->SetInsertPoint(m_bb);
+		if (!function->is_external) {
+			m_bb = &ll_function->getEntryBlock();
+			nyla::llvm_builder->SetInsertPoint(m_bb);
+		}
 		m_ll_function = ll_function;
-
-		nyla::afunction* function = file_unit->functions[index];
 
 		// scope may be nullptr if all that was parsed was
 		// a function declaration.
@@ -95,8 +94,6 @@ void llvm_generator::gen_file_unit(nyla::afile_unit* file_unit, bool print_funct
 		if (print_functions) {
 			ll_function->print(llvm::errs());
 		}
-
-		++index;
 	}
 }
 
@@ -118,21 +115,29 @@ llvm::Function* llvm_generator::gen_function(nyla::afunction* function) {
 		*nyla::working_llvm_module
 	);
 
+	if (function->is_external) {
+		ll_function->setDLLStorageClass(llvm::GlobalValue::DLLImportStorageClass);
+		// TODO: the user should be allowed to set the calling convention in code.
+		ll_function->setCallingConv(llvm::CallingConv::X86_StdCall); // TODO Windows only!
+	}
+
 	// Setting the names of the variables.
 	u64 param_index = 0;
 	for (auto& llvm_param : ll_function->args())
 		llvm_param.setName(function->parameters[param_index++]->variable->name.c_str());
 
-	// The Main block for the function.
-	llvm::BasicBlock* ll_basic_block = llvm::BasicBlock::Create(*nyla::llvm_context, "function block", ll_function);
-	nyla::llvm_builder->SetInsertPoint(ll_basic_block);
-	m_bb = ll_basic_block;
+	if (!function->is_external) {
+		// The Main block for the function.
+		llvm::BasicBlock* ll_basic_block = llvm::BasicBlock::Create(*nyla::llvm_context, "function block", ll_function);
+		nyla::llvm_builder->SetInsertPoint(ll_basic_block);
+		m_bb = ll_basic_block;
 
-	// Allocating memory for the parameters
-	param_index = 0;
-	for (auto& llvm_param : ll_function->args()) {
-		llvm::AllocaInst* var_alloca = gen_alloca(function->parameters[param_index++]->variable);
-		nyla::llvm_builder->CreateStore(&llvm_param, var_alloca); // Storing the incoming value
+		// Allocating memory for the parameters
+		param_index = 0;
+		for (auto& llvm_param : ll_function->args()) {
+			llvm::AllocaInst* var_alloca = gen_alloca(function->parameters[param_index++]->variable);
+			nyla::llvm_builder->CreateStore(&llvm_param, var_alloca); // Storing the incoming value
+		}
 	}
 
 	function->ll_function = ll_function;
@@ -166,6 +171,25 @@ llvm::Type* llvm_generator::gen_type(nyla::type* type) {
 		return llvm::Type::getInt8Ty(*nyla::llvm_context);
 	case TYPE_VOID:
 		return llvm::Type::getVoidTy(*nyla::llvm_context);
+	case TYPE_CHAR16:
+		return llvm::Type::getInt16Ty(*nyla::llvm_context);
+		// Pointers
+	case TYPE_PTR_BYTE:
+		return llvm::Type::getInt8PtrTy(*nyla::llvm_context, type->ptr_depth);
+	case TYPE_PTR_SHORT:
+		return llvm::Type::getInt16PtrTy(*nyla::llvm_context, type->ptr_depth);
+	case TYPE_PTR_INT:
+		return llvm::Type::getInt32PtrTy(*nyla::llvm_context, type->ptr_depth);
+	case TYPE_PTR_LONG:
+		return llvm::Type::getInt64PtrTy(*nyla::llvm_context, type->ptr_depth);
+	case TYPE_PTR_FLOAT:
+		return llvm::Type::getFloatPtrTy(*nyla::llvm_context, type->ptr_depth);
+	case TYPE_PTR_DOUBLE:
+		return llvm::Type::getDoublePtrTy(*nyla::llvm_context, type->ptr_depth);
+	case TYPE_PTR_BOOL:
+		return llvm::Type::getInt8PtrTy(*nyla::llvm_context, type->ptr_depth);
+	case TYPE_PTR_CHAR16:
+		return llvm::Type::getInt16PtrTy(*nyla::llvm_context, type->ptr_depth);
 	}
 	return nullptr;
 }
@@ -180,8 +204,12 @@ llvm::Value* llvm_generator::gen_expression(nyla::aexpr* expr) {
 	case AST_VALUE_FLOAT:
 	case AST_VALUE_DOUBLE:
 		return gen_number(dynamic_cast<nyla::anumber*>(expr));
+	case AST_VALUE_STRING:
+		return gen_string(dynamic_cast<nyla::astring*>(expr));
 	case AST_BINARY_OP:
 		return gen_binary_op(dynamic_cast<nyla::abinary_op*>(expr));
+	case AST_UNARY_OP:
+		return gen_unary_op(dynamic_cast<nyla::aunary_op*>(expr));
 	case AST_VARIABLE:
 		return gen_variable(dynamic_cast<nyla::avariable*>(expr));
 	case AST_FOR_LOOP:
@@ -214,6 +242,38 @@ llvm::Value* llvm_generator::gen_number(nyla::anumber* number) {
 		return llvm::ConstantFP::get(*nyla::llvm_context, llvm::APFloat(number->value_double));
 	}
 	return nullptr;
+}
+
+llvm::Value* llvm_generator::gen_string(nyla::astring* str) {
+	std::vector<llvm::Constant*> chars_as_16bits;
+	u32 array_size = str->lit.length();
+	for (u32 i = 0; i < array_size; i++) {
+		u16 ch = str->lit[i];
+		chars_as_16bits.push_back(llvm::ConstantInt::get(
+			llvm::IntegerType::getInt16Ty(*nyla::llvm_context), ch, false
+		));
+	}
+
+	llvm::Type* elements_type = llvm::Type::getInt16Ty(*nyla::llvm_context);
+	llvm::ArrayType* array_type = llvm::ArrayType::get(elements_type, array_size);
+
+	llvm::Constant* arr = llvm::ConstantArray::get(
+		array_type,
+		chars_as_16bits
+	);
+	
+	llvm::IRBuilder<> tmp_builder(m_bb, m_bb->begin());
+	llvm::AllocaInst* var_alloca;
+	var_alloca = tmp_builder.CreateAlloca(
+		array_type,
+		llvm::ConstantInt::get(
+			llvm::IntegerType::getInt32Ty(*nyla::llvm_context), array_size, false),                                    // Array size
+		"arrt");
+	tmp_builder.CreateStore(arr, var_alloca);
+	
+	// [n x i16*] to i16*
+	return nyla::llvm_builder->CreateAddrSpaceCast(var_alloca,
+		llvm::IntegerType::getInt16PtrTy(*nyla::llvm_context, 1));
 }
 
 llvm::Value* llvm_generator::gen_binary_op(nyla::abinary_op* binary_op) {
@@ -264,11 +324,34 @@ llvm::Value* llvm_generator::gen_binary_op(nyla::abinary_op* binary_op) {
 	case '<': {
 		llvm::Value* ll_lhs = gen_expression(binary_op->lhs);
 		llvm::Value* ll_rhs = gen_expression(binary_op->rhs);
-		return nyla::llvm_builder->CreateICmpULT(ll_lhs, ll_rhs, "cmplt");
+		if (binary_op->lhs->checked_type->is_int()) {
+			return nyla::llvm_builder->CreateICmpULT(ll_lhs, ll_rhs, "cmplt");
+		}
+		return nyla::llvm_builder->CreateFCmpULT(ll_lhs, ll_rhs, "cmplt");
+	}
+	case '>': {
+		llvm::Value* ll_lhs = gen_expression(binary_op->lhs);
+		llvm::Value* ll_rhs = gen_expression(binary_op->rhs);
+		if (binary_op->lhs->checked_type->is_int()) {
+			return nyla::llvm_builder->CreateICmpUGT(ll_lhs, ll_rhs, "cmpgt");
+		}
+		return nyla::llvm_builder->CreateFCmpUGT(ll_lhs, ll_rhs, "cmpgt");
 	}
 	default:
 		assert(!"An operator has not been handled!");
 		break;
+	}
+	return nullptr;
+}
+
+llvm::Value* llvm_generator::gen_unary_op(nyla::aunary_op* unary_op) {
+	switch (unary_op->op) {
+	case '-':
+		llvm::Value * ll_factor = gen_expression(unary_op->factor);
+		if (unary_op->checked_type->is_int()) {
+			return nyla::llvm_builder->CreateNeg(ll_factor, "negt");
+		}
+		return nyla::llvm_builder->CreateFNeg(ll_factor, "fnegt");
 	}
 	return nullptr;
 }
@@ -359,6 +442,7 @@ llvm::Value* llvm_generator::gen_type_cast(nyla::atype_cast* type_cast) {
 			return nyla::llvm_builder->CreateFPToUI(ll_val, ll_cast_type, "fptouit");
 		}
 	} else if (cast_to_type->is_float() && val_type->is_float()) {
+		// Float to Float
 		if (cast_to_type->get_mem_size() > val_type->get_mem_size()) {
 			// Upcasting float
 			return nyla::llvm_builder->CreateFPExt(ll_val, ll_cast_type, "fpupcastt");
@@ -366,6 +450,10 @@ llvm::Value* llvm_generator::gen_type_cast(nyla::atype_cast* type_cast) {
 			// Downcasting float
 			return nyla::llvm_builder->CreateFPTrunc(ll_val, ll_cast_type, "fptrunctt");
 		}
+	} else if (cast_to_type->is_int() && val_type->is_ptr()) {
+		return nyla::llvm_builder->CreatePtrToInt(ll_val, ll_cast_type, "itoptrt");
+	} else if (cast_to_type->is_ptr() && val_type->is_int()) {
+		return nyla::llvm_builder->CreateIntToPtr(ll_val, ll_cast_type, "ptrtoit");
 	}
 	return nullptr;
 }

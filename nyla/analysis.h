@@ -27,6 +27,8 @@ namespace nyla {
 
 		void type_check_binary_op(nyla::abinary_op* binary_op);
 
+		void type_check_unary_op(nyla::aunary_op* unary_op);
+
 		void type_check_variable_decl(nyla::avariable_decl* variable_decl);
 
 		void type_check_type_cast(nyla::atype_cast* type_cast);
@@ -51,6 +53,7 @@ namespace nyla {
 			               nyla::ast_node* node);
 
 		nyla::afunction* m_function;
+		nyla::ascope*    m_scope;
 		nyla::sym_table& m_sym_table;
 		nyla::log&       m_log;
 

@@ -118,6 +118,17 @@ void log::error(error_tag tag, error_data* data,
 				      << data->str_literal << "'";
 			break;
 		}
+		case ERR_UNDECLARED_VARIABLE: {
+			std::cerr << "Could not find declaration for variable '"
+				      << data->str_literal << "'";
+			break;
+		}
+		case ERR_USE_BEFORE_DECLARED_VARIABLE: {
+			std::cerr << "Attempted to use variable '"
+				      << data->str_literal
+				      << "' before it was declared";
+			break;
+		}
 		}
 		std::cerr << std::endl;
 

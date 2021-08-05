@@ -22,12 +22,22 @@ nyla::afile_unit* nyla::parser::parse_file_unit() {
 			file_unit->functions.push_back(parse_function());
 			break;
 		}
+		case TK_DLLIMPORT:
+			parse_dll_import();
+			break;
+		case TK_EXTERNAL:
+			file_unit->functions.push_back(parse_external_function());
+			break;
+		default:
+			// TODO: report error
+			next_token();
+			break;
 		}
 	}
 	return file_unit;
 }
 
-nyla::afunction* parser::parse_function_decl() {
+nyla::afunction* parser::parse_function_decl(bool make_new_scope) {
 	// TODO: parse function modifiers (public, private access, ect..)
 	nyla::type* return_type = parse_type();
 
@@ -35,13 +45,20 @@ nyla::afunction* parser::parse_function_decl() {
 	function->return_type = return_type;
 	function->name        = parse_identifier();
 	
+	// Needed here so that the parameters declarations are registered
+	// in the function scope.
+	if (make_new_scope) {
+		nyla::ascope* scope = m_sym_table.push_scope(m_current);
+		function->scope = scope;
+	}
+
 	match('(');
 	if (m_current->tag != ')') {
 		// Assuming parameters.
 
 		bool more_parameters = false;
 		do {
-			nyla::avariable_decl* parameter = parse_variable_decl();
+			nyla::avariable_decl* parameter = parse_variable_decl(make_new_scope);
 			function->parameters.push_back(parameter);
 
 			more_parameters = m_current->tag == ',';
@@ -59,11 +76,9 @@ nyla::afunction* nyla::parser::parse_function() {
 	nyla::afunction* function = parse_function_decl();
 	m_sym_table.store_function_decl(function);
 	m_found_ret = false;
-	nyla::ascope* scope = m_sym_table.push_scope(m_current);
-	function->scope = scope;
 	match('{');
 	while (m_current->tag != '}' && m_current->tag != TK_EOF) {
-		scope->stmts.push_back(parse_function_stmt());
+		function->scope->stmts.push_back(parse_function_stmt());
 	}
 	match('}');
 	if (!m_found_ret && function->return_type->tag == TYPE_VOID) {
@@ -71,6 +86,15 @@ nyla::afunction* nyla::parser::parse_function() {
 		function->scope->stmts.push_back(void_ret);
 	}
 	m_sym_table.pop_scope();
+	return function;
+}
+
+nyla::afunction* nyla::parser::parse_external_function() {
+	next_token(); // Parsing external
+	nyla::afunction* function = parse_function_decl(false);
+	m_sym_table.store_function_decl(function);
+	function->is_external = true;
+	match_semis();
 	return function;
 }
 
@@ -85,6 +109,7 @@ nyla::type* parser::parse_type() {
 	case TK_TYPE_FLOAT:  type = nyla::type::get_float();  next_token(); break;
 	case TK_TYPE_DOUBLE: type = nyla::type::get_double(); next_token(); break;
 	case TK_TYPE_BOOL:   type = nyla::type::get_bool();   next_token(); break;
+	case TK_TYPE_CHAR16: type = nyla::type::get_char16(); next_token(); break;
 	case TK_TYPE_VOID:   type = nyla::type::get_void();   next_token(); break;
 	default:
 		produce_error(
@@ -92,6 +117,24 @@ nyla::type* parser::parse_type() {
 			error_data::make_str_literal_load(m_current->to_string().c_str()),
 			m_current, m_current
 		);
+		break;
+	}
+	switch (m_current->tag) {
+	case '*': {
+		// TODO Avoid void pointers
+		u32 ptr_depth = 0;
+		while (m_current->tag == '*') {
+			++ptr_depth;
+			next_token(); // Consuming *
+		}
+		if (ptr_depth > 8) {
+			// TODO: report error!
+			ptr_depth = 8;
+		}
+		type = type->as_ptr(ptr_depth);
+		break;
+	}
+	default:
 		break;
 	}
 	type->st = st;
@@ -112,22 +155,11 @@ nyla::name parser::parse_identifier() {
 	return nyla::name();
 }
 
-nyla::ascope* nyla::parser::parse_scope() {
-	nyla::ascope* scope = m_sym_table.push_scope(m_current);
-	match('{');
-	while (m_current->tag != '}' && m_current->tag != TK_EOF) {
-		scope->stmts.push_back(parse_function_stmt());
-	}
-	match('}');
-	m_sym_table.pop_scope();
-	return scope;
+nyla::avariable_decl* nyla::parser::parse_variable_decl(bool has_scope) {
+	return parse_variable_decl(parse_type(), has_scope);
 }
 
-nyla::avariable_decl* nyla::parser::parse_variable_decl() {
-	return parse_variable_decl(parse_type());
-}
-
-nyla::avariable_decl* nyla::parser::parse_variable_decl(nyla::type* type) {
+nyla::avariable_decl* nyla::parser::parse_variable_decl(nyla::type* type, bool has_scope) {
 	nyla::avariable* variable =
 		make_node<nyla::avariable>(AST_VARIABLE, m_current, m_current);
 	variable->checked_type = type;
@@ -135,12 +167,14 @@ nyla::avariable_decl* nyla::parser::parse_variable_decl(nyla::type* type) {
 	nyla::avariable_decl* variable_delc =
 		make_node<nyla::avariable_decl>(AST_VARIABLE_DECL, type->st, variable->st);
 	variable_delc->variable = variable;
-	if (m_sym_table.has_been_declared(variable)) {
-		produce_error(ERR_VARIABLE_REDECLARATION,
-			error_data::make_str_literal_load(variable->name.c_str()),
-			type->st, variable->st);
-	} else {
-		m_sym_table.store_variable_decl(variable);
+	if (has_scope) {
+		if (m_sym_table.has_been_declared(variable)) {
+			produce_error(ERR_VARIABLE_REDECLARATION,
+				error_data::make_str_literal_load(variable->name.c_str()),
+				type->st, variable->st);
+		} else {
+			m_sym_table.store_declared_variable(variable);
+		}
 	}
 	return variable_delc;
 }
@@ -183,7 +217,8 @@ nyla::aexpr* parser::parse_function_stmt() {
 	case TK_TYPE_BYTE:  case TK_TYPE_SHORT: 
 	case TK_TYPE_INT:   case TK_TYPE_LONG:  
 	case TK_TYPE_FLOAT: case TK_TYPE_DOUBLE:
-	case TK_TYPE_BOOL:  case TK_TYPE_VOID: {
+	case TK_TYPE_BOOL:  case TK_TYPE_VOID:
+	case TK_TYPE_CHAR16: {
 		nyla::avariable_decl* variable_decl = parse_variable_decl();
 		// int a  ;
 		//        ^
@@ -227,6 +262,10 @@ nyla::aexpr* parser::parse_function_stmt() {
 
 nyla::aexpr* nyla::parser::parse_for_loop() {
 	nyla::afor_loop* loop = make_node<nyla::afor_loop>(AST_FOR_LOOP, m_current, m_current);
+	// Need to create a new scope early so declarations are placed
+	// there instead of on the outside of the loop
+	loop->scope = m_sym_table.push_scope(m_current);
+	
 	next_token(); // Consuming for token.
 	if (m_current->tag != ';') {
 		loop->declarations = parse_variable_assign_list();
@@ -245,10 +284,15 @@ nyla::aexpr* nyla::parser::parse_for_loop() {
 	if (m_current->tag != '{') {
 		post = parse_expression();
 	}
-	loop->scope = parse_scope();
+	match('{');
+	while (m_current->tag != '}' && m_current->tag != TK_EOF) {
+		loop->scope->stmts.push_back(parse_function_stmt());
+	}
 	if (post) {
 		loop->scope->stmts.push_back(post);
 	}
+	match('}');
+	m_sym_table.pop_scope();
 	return loop;
 }
 
@@ -299,6 +343,19 @@ nyla::aexpr* nyla::parser::parse_factor() {
 		next_token(); // Consuming the bool token.
 		return boolean;
 	}
+	case TK_STRING_VALUE: {
+		nyla::astring* str = make_node<nyla::astring>(AST_VALUE_STRING, m_current, m_current);
+		str->lit = dynamic_cast<nyla::string_token*>(m_current)->lit;
+		next_token(); // Consuming the string token.
+		return str;
+	}
+	case '(': {
+		match('(');
+		nyla::aexpr* expr = parse_expression(false);
+		if (m_error_recovery) return expr;
+		match(')');
+		return expr;
+	}
 	case TK_TYPE_BYTE:  case TK_TYPE_SHORT:
 	case TK_TYPE_INT:   case TK_TYPE_LONG:
 	case TK_TYPE_FLOAT: case TK_TYPE_DOUBLE:
@@ -342,6 +399,21 @@ nyla::aexpr* nyla::parser::parse_factor() {
 	}
 }
 
+nyla::aexpr* nyla::parser::parse_unary() {
+	switch (m_current->tag) {
+	case '-': {
+		next_token(); // Consuming -
+		nyla::aexpr* factor = parse_factor();
+		nyla::aunary_op* unary_op = make_node<nyla::aunary_op>(AST_UNARY_OP, m_current, factor->st);
+		unary_op->op = '-';
+		unary_op->factor = factor;
+		return unary_op;
+	}
+	default:
+		return parse_factor();
+	}
+}
+
 nyla::aexpr* parser::on_binary_op(nyla::token* op_token,
 	                              nyla::aexpr* lhs, nyla::aexpr* rhs) {
 	// Subdivides an equal + operator into seperate nodes.
@@ -374,7 +446,7 @@ nyla::aexpr* parser::on_binary_op(nyla::token* op_token,
 }
 
 nyla::aexpr* parser::parse_expression(bool undo_recovery) {
-	return parse_expression(parse_factor(), undo_recovery);
+	return parse_expression(parse_unary(), undo_recovery);
 }
 
 nyla::aexpr* parser::parse_expression(nyla::aexpr* lhs, bool undo_recovery) {
@@ -397,7 +469,7 @@ nyla::aexpr* parser::parse_expression(nyla::aexpr* lhs, bool undo_recovery) {
 	while (binary_ops_set.find(op->tag) != binary_ops_set.end()) {
 		next_token(); // Consuming the operator.
 	
-		nyla::aexpr* rhs = parse_factor();
+		nyla::aexpr* rhs = parse_unary();
 		if (m_error_recovery) {
 			expression_recovery();
 			if (undo_recovery)  m_error_recovery = false;
@@ -454,6 +526,9 @@ nyla::afunction_call* parser::parse_function_call(nyla::name& name, nyla::token*
 			function_call->parameter_values.push_back(
 				parse_expression(false)
 			);
+			if (m_error_recovery) {
+				return function_call;
+			}
 
 			more_expressions = m_current->tag == ',';
 			if (more_expressions) {
@@ -463,6 +538,19 @@ nyla::afunction_call* parser::parse_function_call(nyla::name& name, nyla::token*
 	}
 	match(')');
 	return function_call;
+}
+
+void nyla::parser::parse_dll_import() {
+	next_token(); // Consuming dllimport
+	match('(');
+	if (m_current->tag != TK_STRING_VALUE) {
+		// TODO: report error!
+	}
+	std::string dll_import_path = dynamic_cast<nyla::string_token*>(m_current)->lit;
+	m_sym_table.import_dll(dll_import_path);
+	next_token(); // Consuming the path
+	match(')');
+	match_semis();
 }
 
 nyla::token* parser::peek_token(u32 n) {
@@ -537,4 +625,3 @@ void parser::produce_error(error_tag tag, error_data* data,
 	                             nyla::token* start_token, nyla::token* end_token) {
 	m_log.error(tag, data, start_token, end_token);
 }
-

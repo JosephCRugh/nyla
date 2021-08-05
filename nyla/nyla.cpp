@@ -1,9 +1,6 @@
 ﻿/*
  * Compiler being writen with LLVM.
  * 
- * Lack of comments currently reflect that
- * functions are likely to change.
- * 
  * Contributors: Joseph C Rugh 
  */
 

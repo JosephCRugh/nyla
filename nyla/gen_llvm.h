@@ -48,7 +48,11 @@ namespace nyla {
 
 		llvm::Value* gen_number(nyla::anumber* number);
 
+		llvm::Value* gen_string(nyla::astring* str);
+
 		llvm::Value* gen_binary_op(nyla::abinary_op* binary_op);
+
+		llvm::Value* gen_unary_op(nyla::aunary_op* unary_op);
 
 		llvm::Value* gen_variable_decl(nyla::avariable_decl* variable_decl);
 
