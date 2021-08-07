@@ -125,6 +125,7 @@ nyla::token* lexer::next_token() {
 	case '<': case '>':
 	case '(': case ')':
 	case '[': case ']':
+	case '.':
 		return next_symbol();
 	case '"':
 		return next_string();

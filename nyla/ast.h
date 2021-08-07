@@ -1,10 +1,10 @@
 #pragma once
 
 #include "token.h"
-#include "type.h"
 #include "name.h"
 #include <vector>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/Instructions.h>
 
 namespace nyla {
 
@@ -14,7 +14,19 @@ namespace nyla {
 		AST_VARIABLE_DECL,
 		AST_SCOPE,
 		AST_RETURN,
+		
+		AST_VALUE_BYTE,
+		AST_VALUE_SHORT,
 		AST_VALUE_INT,
+		AST_VALUE_LONG,
+
+		AST_VALUE_UBYTE,
+		AST_VALUE_USHORT,
+		AST_VALUE_UINT,
+		AST_VALUE_ULONG,
+
+		AST_VALUE_CHAR16,
+		
 		AST_VALUE_FLOAT,
 		AST_VALUE_DOUBLE,
 		AST_VALUE_BOOL,
@@ -25,8 +37,13 @@ namespace nyla {
 		AST_TYPE_CAST,
 		AST_FILE_UNIT,
 		AST_FUNCTION_CALL,
+		AST_ARRAY_ACCESS,
+		AST_ARRAY,
 		AST_ERROR
 	};
+
+	struct ast_node;
+	struct type;
 
 	struct ast_node {
 		ast_tag tag;
@@ -35,68 +52,60 @@ namespace nyla {
 		
 		virtual ~ast_node() {}
 
-		friend std::ostream& operator<<(std::ostream& os, const nyla::ast_node* node) {
-			node->print(os);
-			return os;
-		}
+		friend std::ostream& operator<<(std::ostream& os, const nyla::ast_node* node);
 
 		virtual void print(std::ostream& os, u32 depth = 0) const = 0;
 
-		std::string indent(u32 depth) const { return std::string(depth * 4, ' '); }
+		std::string indent(u32 depth) const;
+
 	};
 
 	struct aexpr : public ast_node {
 		virtual ~aexpr() {}
+		bool is_constexpr = true;
 		virtual void print(std::ostream& os, u32 depth = 0) const = 0;
-		nyla::type* checked_type;
+		
+		std::string expr_header(u32 depth) const;
+
+		nyla::type* checked_type = nullptr;
 	};
+
+	
 
 	struct err_expr : public aexpr {
 		virtual ~err_expr() {}
-		virtual void print(std::ostream& os, u32 depth) const override {
-			os << indent(depth) << "Error Expr";
-		}
+		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	struct atype_cast : public aexpr {
 		virtual ~atype_cast() {}
 		nyla::aexpr* value        = nullptr;
-		virtual void print(std::ostream& os, u32 depth) const override {
-			os << indent(depth) << "cast(" << *checked_type << ")" << std::endl;
-			value->print(os, depth+1);
-		}
+		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	struct avariable : public aexpr {
 		virtual ~avariable() {}
-		nyla::name  name;
+		nyla::name                name;
+		llvm::AllocaInst*         ll_alloca;
 
-		virtual void print(std::ostream& os, u32 depth) const override {
-			os << indent(depth) << "\"" << name << "\"";
-		}
+		    // Only applies if the type of the variable is an array
+		std::vector<llvm::Value*> ll_arr_mem_offsets;
+		std::vector<llvm::Value*> ll_arr_sizes;
+
+		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	struct avariable_decl : public aexpr {
 		virtual ~avariable_decl() {}
 		nyla::avariable* variable;
 		nyla::aexpr* assignment = nullptr;
-		virtual void print(std::ostream& os, u32 depth) const override {
-			os << indent(depth) << "var_delc: " << variable << std::endl;
-			if (assignment) {
-				assignment->print(os, depth + 1);
-			} 
-		}
+		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	struct areturn : public aexpr {
 		virtual ~areturn() {}
 		nyla::aexpr* value = nullptr;
-		virtual void print(std::ostream& os, u32 depth) const override {
-			os << indent(depth) << "return" << std::endl;
-			if (value) {
-				value->print(os, depth+1);
-			}
-		}
+		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	struct ascope : public ast_node {
@@ -107,13 +116,7 @@ namespace nyla {
 		std::unordered_map<nyla::name,
 			nyla::avariable*, nyla::name::hash_gen> variables;
 
-		virtual void print(std::ostream& os, u32 depth) const override {
-			os << indent(depth) << "scope" << std::endl;
-			for (nyla::aexpr* stmt : stmts) {
-				stmt->print(os, depth + 1);
-				os << std::endl;
-			}
-		}
+		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	struct afor_loop : public aexpr {
@@ -121,68 +124,47 @@ namespace nyla {
 		std::vector<nyla::avariable_decl*> declarations;
 		nyla::aexpr*                       cond = nullptr;
 		nyla::ascope*                      scope;
-		virtual void print(std::ostream& os, u32 depth) const override {
-			os << indent(depth) << "for_loop" << std::endl;
-			os << indent(depth) << "loop__declarations:" << std::endl;
-			for (nyla::avariable_decl* decl : declarations) {
-				decl->print(os, depth + 1);
-				os << std::endl;
-			}
-			os << indent(depth) << "loop__condition:" << std::endl;
-			if (cond) {
-				cond->print(os, depth + 1);
-				os << std::endl;
-			}
-			os << indent(depth) << "loop__body:" << std::endl;
-			scope->print(os, depth + 1);
-		}
+		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	struct anumber : public aexpr {
 		virtual ~anumber() {}
 		union {
 			s32    value_int;
+			s64    value_long;
+			u32    value_uint;
+			u64    value_ulong;
 			float  value_float;
 			double value_double;
 		};
-		virtual void print(std::ostream& os, u32 depth) const override {
-			switch (tag) {
-			case AST_VALUE_INT:
-				os << indent(depth) << "int: " << value_int; break;
-			case AST_VALUE_FLOAT:
-				os << indent(depth) << "float: " << value_float; break;
-			case AST_VALUE_DOUBLE:
-				os << indent(depth) << "double: " << value_double; break;
-			}
-			
-		}
+		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	struct abool : public aexpr {
 		virtual ~abool() {}
 		bool tof;
-		virtual void print(std::ostream& os, u32 depth) const override {
-			os << indent(depth);
-			if (tof) os << "true"; else os << "false";
-		}
+		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	struct astring : public aexpr {
 		virtual ~astring() {}
 		std::string lit;
-		virtual void print(std::ostream& os, u32 depth) const override {
-			os << indent(depth) << lit;
-		}
+		virtual void print(std::ostream& os, u32 depth) const override;
+	};
+
+	struct aarray : public aexpr {
+		virtual ~aarray() {}
+		std::vector<u64>          depths;
+		std::vector<nyla::aexpr*> elements;
+		virtual void print(std::ostream& os, u32 depth) const override;
+
 	};
 
 	struct aunary_op : public aexpr {
 		virtual ~aunary_op() {}
 		u32 op;
 		nyla::aexpr* factor;
-		virtual void print(std::ostream& os, u32 depth) const override {
-			os << indent(depth) << "unary_op: " << nyla::token_tag_to_string(op) << std::endl;
-			factor->print(os, depth + 1);
-		}
+		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	struct abinary_op : public aexpr {
@@ -190,12 +172,7 @@ namespace nyla {
 		u32 op;
 		nyla::aexpr* lhs;
 		nyla::aexpr* rhs;
-		virtual void print(std::ostream& os, u32 depth) const override {
-			os << indent(depth) << "bin_op: " << nyla::token_tag_to_string(op) << std::endl;
-			lhs->print(os, depth + 1);
-			os << std::endl;
-			rhs->print(os, depth + 1);
-		}
+		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	struct afunction : public ast_node {
@@ -208,13 +185,14 @@ namespace nyla {
 
 		bool is_external = false; // Indicates if it is an external to a C
 		                          // style library such as in a DLL.
-		virtual void print(std::ostream& os, u32 depth) const override {
-			os << std::string(depth * 4, ' ');
-			os << "function: " << name << std::endl;
-			if (scope != nullptr) {
-				scope->print(os, depth + 1);
-			}
-		}
+		virtual void print(std::ostream& os, u32 depth) const override;
+	};
+
+	struct aarray_access : public aexpr {
+		virtual ~aarray_access() {}
+		nyla::avariable* variable;
+		std::vector<nyla::aexpr*> indexes;
+		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	struct afunction_call : public aexpr {
@@ -222,24 +200,13 @@ namespace nyla {
 		nyla::name                name;
 		std::vector<nyla::aexpr*> parameter_values;
 		nyla::afunction*          called_function = nullptr;
-		virtual void print(std::ostream& os, u32 depth) const override {
-			os << indent(depth) << "function call: " << name << std::endl;
-			for (nyla::aexpr* parameter_value : parameter_values) {
-				parameter_value->print(os, depth + 1);
-				os << std::endl;
-			}
-		}
+		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	struct afile_unit : public ast_node {
 		virtual ~afile_unit() {}
 		std::vector<nyla::afunction*> functions;
-		virtual void print(std::ostream& os, u32 depth) const override {
-			for (nyla::afunction* function : functions) {
-				function->print(os, depth);
-				os << std::endl;
-			}
-		}
+		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	template<typename node>

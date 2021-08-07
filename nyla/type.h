@@ -12,6 +12,12 @@ namespace nyla {
 		TYPE_SHORT,
 		TYPE_INT,
 		TYPE_LONG,
+
+		TYPE_UBYTE,
+		TYPE_USHORT,
+		TYPE_UINT,
+		TYPE_ULONG,
+
 		TYPE_FLOAT,
 		TYPE_DOUBLE,
 		TYPE_BOOL,
@@ -20,32 +26,43 @@ namespace nyla {
 		TYPE_STRING,
 		TYPE_ERROR,
 
-		TYPE_PTR_BYTE,
-		TYPE_PTR_SHORT,
-		TYPE_PTR_INT,
-		TYPE_PTR_LONG,
-		TYPE_PTR_FLOAT,
-		TYPE_PTR_DOUBLE,
-		TYPE_PTR_BOOL,
-		TYPE_PTR_CHAR16,
+		TYPE_MIXED, // Mixed type is needed
+		            // because array initialization
+					// with {} can have mixed element
+					// types at parse prior to analysis
+					
+		TYPE_PTR,
+		TYPE_ARR,
 
 	};
 
+	struct aexpr;
+
 	struct type {
 		type_tag tag;
+		type_tag elem_tag;
+		
+		u32                       ptr_depth = 0;
+		std::vector<nyla::aexpr*> array_depths;
+
 		nyla::token* st = nullptr;
 		nyla::token* et = nullptr;
-		u32 ptr_depth = 0;
-		
+
 		type() {}
 		type(type_tag _tag) : tag(_tag) {}
 		type(type_tag _tag, u32 _ptr_depth)
-			: tag(_tag), ptr_depth(_ptr_depth){}
+			: tag(_tag), ptr_depth(_ptr_depth) {}
+		type(type_tag _tag, type_tag _elem_tag, u32 _ptr_depth)
+			: tag(_tag), elem_tag(_elem_tag), ptr_depth(_ptr_depth) {}
 
 		static nyla::type* get_byte();
 		static nyla::type* get_short();
 		static nyla::type* get_int();
 		static nyla::type* get_long();
+		static nyla::type* get_ubyte();
+		static nyla::type* get_ushort();
+		static nyla::type* get_uint();
+		static nyla::type* get_ulong();
 		static nyla::type* get_float();
 		static nyla::type* get_double();
 		static nyla::type* get_bool();
@@ -63,43 +80,31 @@ namespace nyla {
 		static nyla::type* get_ptr_bool(u32 depth);
 		static nyla::type* get_ptr_char16(u32 depth);
 
+		static nyla::type* get_arr_byte(std::vector<nyla::aexpr*>& array_depths);
+		static nyla::type* get_arr_short(std::vector<nyla::aexpr*>& array_depths);
+		static nyla::type* get_arr_int(std::vector<nyla::aexpr*>& array_depths);
+		static nyla::type* get_arr_long(std::vector<nyla::aexpr*>& array_depths);
+		static nyla::type* get_arr_float(std::vector<nyla::aexpr*>& array_depths);
+		static nyla::type* get_arr_double(std::vector<nyla::aexpr*>& array_depths);
+		static nyla::type* get_arr_bool(std::vector<nyla::aexpr*>& array_depths);
+		static nyla::type* get_arr_char16(std::vector<nyla::aexpr*>& array_depths);
+		static nyla::type* get_arr_mixed(std::vector<nyla::aexpr*>& array_depths);
+
+		static nyla::type* make_arr(type_tag tag, std::vector<nyla::aexpr*>& array_depths);
+
 		nyla::type* as_ptr(u32 depth);
 
-		friend std::ostream& operator<<(std::ostream& os, const nyla::type& type) {
-			switch (type.tag) {
-			case TYPE_PTR_BYTE:
-			case TYPE_BYTE:     os << "byte"; break;
-			case TYPE_PTR_SHORT:
-			case TYPE_SHORT:    os << "short"; break;
-			case TYPE_PTR_INT:
-			case TYPE_INT:      os << "int"; break;
-			case TYPE_PTR_LONG:
-			case TYPE_LONG:     os << "long"; break;
-			case TYPE_PTR_FLOAT:
-			case TYPE_FLOAT:    os << "float"; break;
-			case TYPE_PTR_DOUBLE:
-			case TYPE_DOUBLE:   os << "double"; break;
-			case TYPE_PTR_BOOL:
-			case TYPE_BOOL:     os << "bool"; break;
-			case TYPE_VOID:     os << "void"; break;
-			case TYPE_STRING:   os << "String"; break;
-			case TYPE_PTR_CHAR16:
-			case TYPE_CHAR16:   os << "char16"; break;
-			}
-			for (u32 i = 0; i < type.ptr_depth; i++) {
-				os << "*";
-			}
-			return os;
-		}
+		nyla::type* as_arr(std::vector<nyla::aexpr*>& array_depths);
 
-		bool operator!=(const nyla::type& o) {
-			return !(*this == o);
-		}
+		nyla::type* get_element_type();
+		
+		friend std::ostream& operator<<(std::ostream& os, const nyla::type& type);
 
-		bool operator==(const nyla::type& o) {
-			return tag == o.tag &&
-				   ptr_depth == o.ptr_depth;
-		}
+		void print_elem(std::ostream& os, type_tag elem_tag) const;
+
+		bool operator!=(const nyla::type& o);
+
+		bool operator==(const nyla::type& o);
 
 		u32 get_mem_size();
 
@@ -113,6 +118,8 @@ namespace nyla {
 
 		bool is_ptr();
 
+		bool is_arr();
+
 	};
 
 	namespace reuse_types {
@@ -120,6 +127,10 @@ namespace nyla {
 		extern nyla::type* short_type;
 		extern nyla::type* int_type;
 		extern nyla::type* long_type;
+		extern nyla::type* ubyte_type;
+		extern nyla::type* ushort_type;
+		extern nyla::type* uint_type;
+		extern nyla::type* ulong_type;
 		extern nyla::type* float_type;
 		extern nyla::type* double_type;
 		extern nyla::type* bool_type;

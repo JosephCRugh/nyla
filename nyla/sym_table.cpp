@@ -16,14 +16,6 @@ void sym_table::pop_scope() {
 	m_scopes.pop();
 }
 
-void sym_table::store_alloca(nyla::avariable* variable, llvm::AllocaInst* var_alloca) {
-	m_alloced_variables[variable->name] = var_alloca;
-}
-
-llvm::AllocaInst* sym_table::get_alloca(nyla::avariable* variable) {
-	return m_alloced_variables[variable->name];
-}
-
 void sym_table::store_function_decl(nyla::afunction* function) {
 	m_declared_functions[function->name] = function;
 }

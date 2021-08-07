@@ -37,9 +37,20 @@ namespace nyla {
 
 		void type_check_for_loop(nyla::afor_loop* for_loop);
 
+		void type_check_type(nyla::type* type);
+
+		void type_check_array(nyla::aarray* arr);
+
+		void type_check_array_access(nyla::aarray_access* array_access);
+
 	private:
 
-		bool is_convertible_to(nyla::type* from, nyla::type* to);
+		void flatten_array(nyla::type* assign_type, std::vector<u64> depths,
+			               nyla::aarray* arr, nyla::aarray*& out_arr, u32 depth = 0);
+
+		bool is_assignable_to(nyla::aexpr* from, nyla::type* to);
+
+		bool attempt_assign(nyla::aexpr*& lhs, nyla::aexpr*& rhs);
 
 		bool only_works_on_ints(u32 op);
 
@@ -52,10 +63,12 @@ namespace nyla {
 		void produce_error(error_tag tag, error_data* data,
 			               nyla::ast_node* node);
 
-		nyla::afunction* m_function;
-		nyla::ascope*    m_scope;
-		nyla::sym_table& m_sym_table;
-		nyla::log&       m_log;
+		nyla::aexpr* gen_default_value(nyla::type* type);
+
+		nyla::afunction*      m_function;
+		nyla::ascope*         m_scope;
+		nyla::sym_table&      m_sym_table;
+		nyla::log&            m_log;
 
 	};
 }

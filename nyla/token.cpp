@@ -10,6 +10,7 @@ std::string nyla::token_tag_to_string(u32 tag) {
 	case TK_VALUE_INT:  return "int value";
 	case TK_VALUE_FLOAT:  return "float value";
 	case TK_VALUE_DOUBLE:  return "double value";
+	case TK_ARRAY_LENGTH: return "array.length";
 	default:
 		if (tag < TK_UNKNOWN)
 			return std::string(1, tag);

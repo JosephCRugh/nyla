@@ -6,6 +6,8 @@
 #include "log.h"
 #include <queue>
 
+static constexpr u32 MAX_MEM_DEPTH = 8;
+
 namespace nyla {
 
 	class parser {
@@ -80,6 +82,12 @@ namespace nyla {
 
 		nyla::afunction_call* parse_function_call(nyla::name& name, nyla::token* start_token);
 
+		nyla::aarray* parse_array();
+
+		nyla::abinary_op* parse_dot_op(nyla::aexpr* lhs);
+
+		nyla::aarray_access* parse_array_access(nyla::name& name, nyla::token* start_token);
+
 		std::vector<nyla::token*> get_processed_tokens() { return m_processed_tokens; }
 
 		void parse_dll_import();
@@ -110,7 +118,7 @@ namespace nyla {
 		/// </summary>
 		void match_semis();
 
-		void expression_recovery();
+		void skip_recovery();
 
 		template<typename node>
 		node* make_node(ast_tag tag, nyla::token* st, nyla::token* et) {
@@ -127,14 +135,24 @@ namespace nyla {
 		  /* Storing tokens so they can be cleaned up */
 		std::vector<nyla::token*> m_processed_tokens;
 
+		/// <summary>
+		/// Looks back at the previously traversed
+		/// tokens and returns the nth token.
+		/// </summary>
+		/// <param name="n">the number of tokens to look back at.</param>
 		nyla::token* look_back(s32 n);
 
 		void produce_error(error_tag tag, error_data* data,
 			               nyla::token* start_token, nyla::token* end_token);
 
-		nyla::token* m_current   = nullptr;
-		bool         m_found_ret = false;
-		bool         m_error_recovery = false;
+		u64              m_max_array_depths[MAX_MEM_DEPTH] = {0};
+		u32              m_array_depth_ptr  = 0;
+		u32              m_array_depth      = 0;
+		bool             m_array_too_deep   = false;
+
+		nyla::token*     m_current          = nullptr;
+		bool             m_found_ret        = false;
+		bool             m_error_recovery   = false;
 
 	};
 

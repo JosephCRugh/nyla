@@ -12,7 +12,7 @@ parser::parser(nyla::lexer& lexer, nyla::sym_table& sym_table, nyla::log& log)
 }
 
 nyla::afile_unit* nyla::parser::parse_file_unit() {
-	nyla::afile_unit* file_unit = make_node<nyla::afile_unit>(AST_FILE_UNIT, nullptr, nullptr);
+	nyla::afile_unit* file_unit = make_node<nyla::afile_unit>(AST_FILE_UNIT, m_current, m_current);
 	while (m_current->tag != TK_EOF) {
 		switch (m_current->tag) {
 		case TK_TYPE_BYTE:  case TK_TYPE_SHORT:
@@ -82,7 +82,7 @@ nyla::afunction* nyla::parser::parse_function() {
 	}
 	match('}');
 	if (!m_found_ret && function->return_type->tag == TYPE_VOID) {
-		nyla::areturn* void_ret = make_node<nyla::areturn>(AST_RETURN, nullptr, nullptr);
+		nyla::areturn* void_ret = make_node<nyla::areturn>(AST_RETURN, m_current, m_current);
 		function->scope->stmts.push_back(void_ret);
 	}
 	m_sym_table.pop_scope();
@@ -127,11 +127,33 @@ nyla::type* parser::parse_type() {
 			++ptr_depth;
 			next_token(); // Consuming *
 		}
-		if (ptr_depth > 8) {
-			// TODO: report error!
-			ptr_depth = 8;
+		if (ptr_depth > MAX_MEM_DEPTH) {
+			produce_error(ERR_TOO_MANY_PTR_SUBSCRIPTS, nullptr, st, m_current);
+			ptr_depth = MAX_MEM_DEPTH;
 		}
 		type = type->as_ptr(ptr_depth);
+		break;
+	}
+	case '[': {
+		std::vector<nyla::aexpr*> array_depths;
+		bool more_array_depths = false;
+		do {
+			match('[');
+			if (m_current->tag == ']') {
+				array_depths.push_back(0);
+			} else {
+				nyla::aexpr* size = parse_expression();
+				// TODO: recovery
+				array_depths.push_back(size);
+			}
+			match(']');
+			more_array_depths = m_current->tag == '[';
+		} while (more_array_depths);
+		if (array_depths.size() > MAX_MEM_DEPTH) {
+			produce_error(ERR_TOO_MANY_ARRAY_SUBSCRIPTS, nullptr, st, m_current);
+			array_depths.resize(MAX_MEM_DEPTH);
+		}
+		type = type->as_arr(array_depths);
 		break;
 	}
 	default:
@@ -255,7 +277,7 @@ nyla::aexpr* parser::parse_function_stmt() {
 			m_current, m_current
 		);
 		next_token(); // Consuming the token that doesn't belong
-		return make_node<nyla::err_expr>(AST_ERROR, nullptr, nullptr);
+		return make_node<nyla::err_expr>(AST_ERROR, m_current, m_current);
 	}
 	}
 }
@@ -375,17 +397,20 @@ nyla::aexpr* nyla::parser::parse_factor() {
 		switch (m_current->tag) { 
 		case  '(':
 			return parse_function_call(name, identifier_token);
-		case '.':
-			// TODO: dot reference operator
-			break;
+		case '[':
+			return parse_array_access(name, identifier_token);
 		default:
 			break;
 		}
 		nyla::avariable* variable = make_node<nyla::avariable>(AST_VARIABLE,
 			identifier_token, identifier_token);
 		variable->name = name;
+
 		// The type is determined during symantic analysis.
 		return variable;
+	}
+	case '{': {
+		return parse_array();
 	}
 	default: {
 		produce_error(ERR_EXPECTED_FACTOR,
@@ -394,12 +419,12 @@ nyla::aexpr* nyla::parser::parse_factor() {
 		);
 		next_token(); // consuming the unknown factor
 		m_error_recovery = true;
-		return make_node<nyla::err_expr>(AST_ERROR, nullptr, nullptr);
+		return make_node<nyla::err_expr>(AST_ERROR, m_current, m_current);
 	}
 	}
 }
 
-nyla::aexpr* nyla::parser::parse_unary() {
+nyla::aexpr* parser::parse_unary() {
 	switch (m_current->tag) {
 	case '-': {
 		next_token(); // Consuming -
@@ -407,10 +432,21 @@ nyla::aexpr* nyla::parser::parse_unary() {
 		nyla::aunary_op* unary_op = make_node<nyla::aunary_op>(AST_UNARY_OP, m_current, factor->st);
 		unary_op->op = '-';
 		unary_op->factor = factor;
+		if (m_current->tag == '.') {
+			nyla::aexpr* dot_op = parse_dot_op(factor);
+			unary_op->factor = dot_op;
+		}
 		return unary_op;
 	}
-	default:
-		return parse_factor();
+	default: {
+		nyla::aexpr* factor = parse_factor();
+		switch (m_current->tag) {
+		case '.':
+			return parse_dot_op(factor);
+		default:
+			return factor;
+		}
+	}
 	}
 }
 
@@ -452,9 +488,9 @@ nyla::aexpr* parser::parse_expression(bool undo_recovery) {
 nyla::aexpr* parser::parse_expression(nyla::aexpr* lhs, bool undo_recovery) {
 	
 	if (m_error_recovery) {
-		expression_recovery();
+		skip_recovery();
 		if (undo_recovery)  m_error_recovery = false;
-		return make_node<nyla::err_expr>(AST_ERROR, nullptr, nullptr);
+		return make_node<nyla::err_expr>(AST_ERROR, m_current, m_current);
 	}
 
 	nyla::token* op = m_current;
@@ -471,9 +507,9 @@ nyla::aexpr* parser::parse_expression(nyla::aexpr* lhs, bool undo_recovery) {
 	
 		nyla::aexpr* rhs = parse_unary();
 		if (m_error_recovery) {
-			expression_recovery();
+			skip_recovery();
 			if (undo_recovery)  m_error_recovery = false;
-			return make_node<nyla::err_expr>(AST_ERROR, nullptr, nullptr);
+			return make_node<nyla::err_expr>(AST_ERROR, m_current, m_current);
 		}
 		
 		next_op = m_current;
@@ -540,6 +576,100 @@ nyla::afunction_call* parser::parse_function_call(nyla::name& name, nyla::token*
 	return function_call;
 }
 
+nyla::aarray* parser::parse_array() {
+	// NOTE OF WARNING: Before returning on this function
+	// the function should ALWAYS decrement m_array_depth if
+	// it has been incremented
+	
+	nyla::token* start_token = m_current;
+	nyla::aarray* arr = make_node<nyla::aarray>(AST_ARRAY, m_current, m_current);
+	match('{');
+	if (m_array_depth == 0) {
+		m_array_too_deep = false;
+		m_array_depth_ptr = 0;
+		for (u32 i = 0; i < MAX_MEM_DEPTH; i++) {
+			m_max_array_depths[i] = 0;
+		}
+	}
+	++m_array_depth;
+	if (m_array_depth > m_array_depth_ptr) {
+		m_array_depth_ptr = m_array_depth;
+	}
+	if (m_array_depth_ptr > 8) {
+		m_array_depth_ptr = 8;
+	}
+	bool more_elements = false;
+	if (m_current->tag != '}') {
+		do {
+			nyla::aexpr* element = parse_expression();
+			arr->elements.push_back(element);
+			more_elements = m_current->tag == ',';
+			if (more_elements) {
+				next_token(); // Consuming ,
+			}
+		} while (more_elements);
+	}
+	--m_array_depth;
+	
+	if (m_array_depth > MAX_MEM_DEPTH - 1) {
+		m_array_too_deep = true;
+	} else {
+		if (arr->elements.size() > m_max_array_depths[m_array_depth]) {
+			m_max_array_depths[m_array_depth] = arr->elements.size();
+		}
+	}
+	if (m_array_depth == 0) {
+		if (m_array_too_deep) {
+			produce_error(ERR_ARRAY_TOO_DEEP, nullptr, arr->st, m_current);
+			arr->checked_type = nyla::type::get_error();
+		}
+
+		for (u32 i = 0; i < m_array_depth_ptr; i++) {
+			arr->depths.push_back(m_max_array_depths[i]);
+		}
+	}
+	arr->et = m_current;
+	match('}');
+	return arr;
+}
+
+nyla::abinary_op* parser::parse_dot_op(nyla::aexpr* lhs) {
+	match('.');
+	nyla::aexpr* rhs = parse_factor();
+	nyla::abinary_op* dot_op = make_node<nyla::abinary_op>(AST_BINARY_OP, lhs->et, rhs->et);
+	dot_op->op = '.';
+	dot_op->lhs = lhs;
+	dot_op->rhs = rhs;
+	while (m_current->tag == '.') {
+		match('.');
+		rhs = parse_factor();
+		nyla::abinary_op* next_dot_op = make_node<nyla::abinary_op>(AST_BINARY_OP, dot_op->et, rhs->et);
+		next_dot_op->op = '.';
+		next_dot_op->rhs = dot_op;
+		next_dot_op->lhs = rhs;
+		dot_op = next_dot_op;
+	}
+	return dot_op;
+}
+
+nyla::aarray_access* parser::parse_array_access(nyla::name& name, nyla::token* start_token) {
+	nyla::aarray_access* array_access = make_node<nyla::aarray_access>(
+		AST_ARRAY_ACCESS, start_token, start_token);
+	nyla::avariable* variable = make_node<nyla::avariable>(AST_VARIABLE,
+		start_token, start_token);
+	variable->name = name;
+	array_access->variable = variable;
+	bool more_subscripts = false;
+	do {
+		match('[');
+		array_access->indexes.push_back(parse_expression(false));
+		match(']');
+		more_subscripts = m_current->tag == '[';
+	} while (more_subscripts);
+	array_access->et = look_back(1);
+	return array_access;
+}
+
 void nyla::parser::parse_dll_import() {
 	next_token(); // Consuming dllimport
 	match('(');
@@ -594,7 +724,7 @@ void parser::match_semis() {
 	}
 }
 
-void nyla::parser::expression_recovery() {
+void nyla::parser::skip_recovery() {
 	// Eating tokens till we find something sensical that
 	// could begin another statement.
 	while (true) {
@@ -602,10 +732,20 @@ void nyla::parser::expression_recovery() {
 		case ';':
 		case TK_EOF:
 		case '}':
+		case ',':
 		case TK_FOR:
 		case TK_IF:
 		case TK_WHILE:
 		case TK_SWITCH:
+		case TK_TYPE_BYTE:
+		case TK_TYPE_SHORT:
+		case TK_TYPE_INT:
+		case TK_TYPE_LONG:
+		case TK_TYPE_FLOAT:
+		case TK_TYPE_DOUBLE:
+		case TK_TYPE_BOOL:
+		case TK_TYPE_VOID:
+		case TK_TYPE_CHAR16:
 			return;
 		default:
 			next_token();

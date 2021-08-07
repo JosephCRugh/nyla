@@ -92,7 +92,30 @@ void log::error(error_tag tag, error_data* data,
 			std::cerr << "Cannot assign value of type '"
 				      << *mismatch_data->found_type
 				      << "' to variable of type '"
+				      << *mismatch_data->expected_type
+				      << "'";
+			break;
+		}
+		case ERR_DIMENSIONS_OF_ARRAYS_MISMATCH: {
+			nyla::type_mismatch_data* mismatch_data =
+				dynamic_cast<nyla::type_mismatch_data*>(data);
+			std::cerr << "Array dimension of '"
+				      << mismatch_data->found_type->array_depths.size()
+				      << "' is not compatible with the expected dimension '"
+				      << mismatch_data->expected_type->array_depths.size() << "'";
+			break;
+		}
+		case ERR_ELEMENT_OF_ARRAY_NOT_COMPATIBLE_WITH_ARRAY: {
+			nyla::type_mismatch_data* mismatch_data =
+				dynamic_cast<nyla::type_mismatch_data*>(data);
+			std::cerr << "Element of type '"
+				      << *mismatch_data->found_type
+				      << "' is not compatible with array element type '"
 				      << *mismatch_data->expected_type << "'";
+			break;
+		}
+		case ERR_ARRAY_SIZE_SHOULD_BE_IMPLICIT: {
+			std::cerr << "The size of the array should be implict when initializing";
 			break;
 		}
 		case ERR_OP_CANNOT_APPLY_TO: {
@@ -102,6 +125,29 @@ void log::error(error_tag tag, error_data* data,
 				      << nyla::token_tag_to_string(applies_to_data->op)
 				      << "' cannot be applied to '"
 				      << applies_to_data->err_token->to_string() << "'";
+			break;
+		}
+		case ERR_DOT_OP_ON_ARRAY_EXPECTS_LENGTH: {
+			std::cerr << "Operator '.' applied to array expected .length";
+			break;
+		}
+		case ERR_ARRAY_LENGTH_OPERATOR_EXPECTS_SINGLE_DIM: {
+			// TODO: oddly worded
+			std::cerr << "Accessing the dimension of an array length expects a single ['index'] subscript";
+			break;
+		}
+		case ERR_ARRAY_LENGTH_OPERATOR_EXPECTS_INT_DIM: {
+			// TODO: oddly worded
+			std::cerr << "Expected integer when accessing length dimension of array";
+			break;
+		}
+		case ERR_ARRAY_LENGTH_OPERATOR_INVALID_DIM_INDEX: {
+			std::cerr << "Invalid dimension index of array.length['index'] for array of type '"
+				      << *data->type << "'";
+			break;
+		}
+		case ERR_ARRAY_LENGTH_NO_DIM_INDEX_FOR_MULTIDIM_ARRAY: {
+			std::cerr << "For a multi-dimensional array the .length operator expects a dimension. Snytax: .length['index']";
 			break;
 		}
 		case ERR_EXPECTED_BOOL_COND: {
@@ -127,6 +173,24 @@ void log::error(error_tag tag, error_data* data,
 			std::cerr << "Attempted to use variable '"
 				      << data->str_literal
 				      << "' before it was declared";
+			break;
+		}
+		case ERR_ARRAY_SIZE_EXPECTS_INT: {
+			std::cerr << "Size of array for type '"
+				      << *data->type
+				      << "' is expected to be an integer value";
+			break;
+		}
+		case ERR_TOO_MANY_ARRAY_SUBSCRIPTS: {
+			std::cerr << "Too many array subscripts. Maximum is 8";
+			break;
+		}
+		case ERR_TOO_MANY_PTR_SUBSCRIPTS: {
+			std::cerr << "Too many pointer subscripts. Maximum is 8";
+			break;
+		}
+		case ERR_ARRAY_TOO_DEEP: {
+			std::cerr << "Array too deep. Can only go down 8 levels.";
 			break;
 		}
 		}

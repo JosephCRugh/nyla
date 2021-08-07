@@ -30,7 +30,19 @@ namespace nyla {
 		ERR_EXPECTED_BOOL_COND,
 		ERR_FUNCTION_NOT_FOUND,
 		ERR_UNDECLARED_VARIABLE,
-		ERR_USE_BEFORE_DECLARED_VARIABLE
+		ERR_USE_BEFORE_DECLARED_VARIABLE,
+		ERR_ARRAY_SIZE_EXPECTS_INT,
+		ERR_DIMENSIONS_OF_ARRAYS_MISMATCH,
+		ERR_ELEMENT_OF_ARRAY_NOT_COMPATIBLE_WITH_ARRAY,
+		ERR_ARRAY_SIZE_SHOULD_BE_IMPLICIT,
+		ERR_TOO_MANY_ARRAY_SUBSCRIPTS,
+		ERR_TOO_MANY_PTR_SUBSCRIPTS,
+		ERR_ARRAY_TOO_DEEP,
+		ERR_DOT_OP_ON_ARRAY_EXPECTS_LENGTH,
+		ERR_ARRAY_LENGTH_OPERATOR_EXPECTS_SINGLE_DIM,
+		ERR_ARRAY_LENGTH_OPERATOR_EXPECTS_INT_DIM,
+		ERR_ARRAY_LENGTH_OPERATOR_INVALID_DIM_INDEX,
+		ERR_ARRAY_LENGTH_NO_DIM_INDEX_FOR_MULTIDIM_ARRAY
 	};
 
 	struct error_data {
@@ -58,11 +70,17 @@ namespace nyla {
 			data->token = token;
 			return data;
 		}
+		static error_data* make_type_load(nyla::type* type) {
+			error_data* data = new error_data;
+			data->type = type;
+			return data;
+		}
 		union {
 			c8           character;
 			c_string     str_literal;
 			u32          token_tag;
 			nyla::token* token;
+			nyla::type*  type;
 		};
 	};
 

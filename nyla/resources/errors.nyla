@@ -1,27 +1,42 @@
 
 int main() {
 	int f = 12412  243   int g = 4;
-
+	
 	int l = 5 + for;
-
+	
 	int a = int((32.42);
-
-	23.123
-
+	
+	``23.123
+	
 	`` redeclaration error
 	int l = 7;
-
+	
 	double r = 214;
 	double mm =  312 -3 + 412.0 + true;
-
+	
 	y = 44;
-
-	decl_test = 44;
+	
+	``decl_test = 44;
 	int decl_test;
-
+	
 	for int i = 0; i / 4; i += 1 {
 	
 	}
-
+	
 	for a; ; {}
+
+	`` Array dimension mismatch
+	int[][] arr = { { { 5 } } };
+	`` Incompatible elements
+	int[] arr1 = { 3, 1, 4.0 };
+
+	`` Should be implicit [4] should be []
+	int[4] arr2 = { 1, 2, 3, 4 };
+
+	int[][][][][][][][][][][][][][][] OK;
+
+	int************************** WAY_TOO_MANY;
+
+	int g = { { { { { { { { { } } } } } } } } };
+
 }

@@ -61,6 +61,9 @@ namespace nyla {
 
 		// === Other === \\
 
+		// Internal operator
+		TK_ARRAY_LENGTH,
+
 		TK_EOF
 	};
 

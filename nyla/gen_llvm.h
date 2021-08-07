@@ -62,6 +62,10 @@ namespace nyla {
 
 		llvm::Value* gen_type_cast(nyla::atype_cast* type_cast);
 
+		llvm::Value* gen_array(nyla::aarray* arr, llvm::AllocaInst* llvm_arr);
+
+		llvm::Value* gen_array_access(nyla::aarray_access* array_access);
+
 	private:
 
 		llvm::AllocaInst* gen_alloca(nyla::avariable* variable);
@@ -69,5 +73,6 @@ namespace nyla {
 		nyla::sym_table   m_sym_table;
 		llvm::BasicBlock* m_bb;
 		llvm::Function*   m_ll_function;
+		nyla::ascope*     m_scope = nullptr;
 	};
 }

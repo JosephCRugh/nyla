@@ -174,7 +174,8 @@ std::unordered_map<std::string, int> program_err_codes = {
 				return sum;
 			}()  },
 	{ "func_call.nyla", 7+54 },
-	{ "print.nyla", 0 }
+	{ "print.nyla", 0 },
+	{ "arrays.nyla", 412 + 21 + 5 + 6 + 4 }
 };
 
 void run_llvm_gen_tests() {
@@ -205,7 +206,7 @@ void run_llvm_gen_tests() {
 		std::cout << file_unit << std::endl;
 		
 		analysis.type_check_file_unit(file_unit);
-
+		
 		std::cout << file_unit << std::endl;
 		if (log.get_num_errors() != 0) {
 			return;
@@ -235,7 +236,7 @@ void run_llvm_gen_tests() {
 			delete token;
 		}
 		delete[] buffer;
-
+		
 	});
 
 	delete nyla::working_llvm_module;

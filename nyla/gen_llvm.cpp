@@ -1,5 +1,7 @@
 #include "gen_llvm.h"
 
+#include "type.h"
+
 using namespace nyla;
 
 llvm::LLVMContext* nyla::llvm_context;
@@ -86,9 +88,11 @@ void llvm_generator::gen_file_unit(nyla::afile_unit* file_unit, bool print_funct
 		// scope may be nullptr if all that was parsed was
 		// a function declaration.
 		if (function->scope != nullptr) {
+			m_scope = function->scope;
 			for (nyla::aexpr* stmt : function->scope->stmts) {
 				gen_expression(stmt);
 			}
+			m_scope = m_scope->parent;
 		}
 
 		if (print_functions) {
@@ -156,12 +160,16 @@ llvm::Value* nyla::llvm_generator::gen_function_call(nyla::afunction_call* funct
 llvm::Type* llvm_generator::gen_type(nyla::type* type) {
 	switch (type->tag) {
 	case TYPE_BYTE:
+	case TYPE_UBYTE:
 		return llvm::Type::getInt8Ty(*nyla::llvm_context);
 	case TYPE_SHORT:
+	case TYPE_USHORT:
 		return llvm::Type::getInt16Ty(*nyla::llvm_context);
 	case TYPE_INT:
+	case TYPE_UINT:
 		return llvm::Type::getInt32Ty(*nyla::llvm_context);
 	case TYPE_LONG:
+	case TYPE_ULONG:
 		return llvm::Type::getInt64Ty(*nyla::llvm_context);
 	case TYPE_FLOAT:
 		return llvm::Type::getFloatTy(*nyla::llvm_context);
@@ -173,25 +181,36 @@ llvm::Type* llvm_generator::gen_type(nyla::type* type) {
 		return llvm::Type::getVoidTy(*nyla::llvm_context);
 	case TYPE_CHAR16:
 		return llvm::Type::getInt16Ty(*nyla::llvm_context);
+	case TYPE_PTR: {
 		// Pointers
-	case TYPE_PTR_BYTE:
-		return llvm::Type::getInt8PtrTy(*nyla::llvm_context, type->ptr_depth);
-	case TYPE_PTR_SHORT:
-		return llvm::Type::getInt16PtrTy(*nyla::llvm_context, type->ptr_depth);
-	case TYPE_PTR_INT:
-		return llvm::Type::getInt32PtrTy(*nyla::llvm_context, type->ptr_depth);
-	case TYPE_PTR_LONG:
-		return llvm::Type::getInt64PtrTy(*nyla::llvm_context, type->ptr_depth);
-	case TYPE_PTR_FLOAT:
-		return llvm::Type::getFloatPtrTy(*nyla::llvm_context, type->ptr_depth);
-	case TYPE_PTR_DOUBLE:
-		return llvm::Type::getDoublePtrTy(*nyla::llvm_context, type->ptr_depth);
-	case TYPE_PTR_BOOL:
-		return llvm::Type::getInt8PtrTy(*nyla::llvm_context, type->ptr_depth);
-	case TYPE_PTR_CHAR16:
-		return llvm::Type::getInt16PtrTy(*nyla::llvm_context, type->ptr_depth);
+		switch (type->elem_tag) {
+		case TYPE_BYTE:
+		case TYPE_UBYTE:
+			return llvm::Type::getInt8PtrTy(*nyla::llvm_context, type->ptr_depth);
+		case TYPE_SHORT:
+		case TYPE_USHORT:
+			return llvm::Type::getInt16PtrTy(*nyla::llvm_context, type->ptr_depth);
+		case TYPE_INT:
+		case TYPE_UINT:
+			return llvm::Type::getInt32PtrTy(*nyla::llvm_context, type->ptr_depth);
+		case TYPE_LONG:
+		case TYPE_ULONG:
+			return llvm::Type::getInt64PtrTy(*nyla::llvm_context, type->ptr_depth);
+		case TYPE_FLOAT:
+			return llvm::Type::getFloatPtrTy(*nyla::llvm_context, type->ptr_depth);
+		case TYPE_DOUBLE:
+			return llvm::Type::getDoublePtrTy(*nyla::llvm_context, type->ptr_depth);
+		case TYPE_BOOL:
+			return llvm::Type::getInt8PtrTy(*nyla::llvm_context, type->ptr_depth);
+		case TYPE_CHAR16:
+			return llvm::Type::getInt16PtrTy(*nyla::llvm_context, type->ptr_depth);
+		}
+	}
+	case TYPE_ARR: {
+		return gen_type(type->get_element_type());
 	}
 	return nullptr;
+	}
 }
 
 llvm::Value* llvm_generator::gen_expression(nyla::aexpr* expr) {
@@ -200,7 +219,14 @@ llvm::Value* llvm_generator::gen_expression(nyla::aexpr* expr) {
 		return gen_return(dynamic_cast<nyla::areturn*>(expr));
 	case AST_VARIABLE_DECL:
 		return gen_variable_decl(dynamic_cast<nyla::avariable_decl*>(expr));
+	case AST_VALUE_BYTE:
+	case AST_VALUE_SHORT:
 	case AST_VALUE_INT:
+	case AST_VALUE_LONG:
+	case AST_VALUE_UBYTE:
+	case AST_VALUE_USHORT:
+	case AST_VALUE_UINT:
+	case AST_VALUE_ULONG:
 	case AST_VALUE_FLOAT:
 	case AST_VALUE_DOUBLE:
 		return gen_number(dynamic_cast<nyla::anumber*>(expr));
@@ -218,6 +244,8 @@ llvm::Value* llvm_generator::gen_expression(nyla::aexpr* expr) {
 		return gen_type_cast(dynamic_cast<nyla::atype_cast*>(expr));
 	case AST_FUNCTION_CALL:
 		return gen_function_call(dynamic_cast<nyla::afunction_call*>(expr));
+	case AST_ARRAY_ACCESS:
+		return gen_array_access(dynamic_cast<nyla::aarray_access*>(expr));
 	}
 	return nullptr;
 }
@@ -233,9 +261,22 @@ llvm::Value* llvm_generator::gen_return(nyla::areturn* ret) {
 
 llvm::Value* llvm_generator::gen_number(nyla::anumber* number) {
 	switch (number->tag) {
-	case AST_VALUE_INT:
+	case AST_VALUE_BYTE:
+	case AST_VALUE_UBYTE:
 		return llvm::ConstantInt::get(
-			llvm::IntegerType::getInt32Ty(*nyla::llvm_context), number->value_int, true);
+			llvm::IntegerType::getInt8Ty(*nyla::llvm_context), number->value_int, number->checked_type->is_signed());
+	case AST_VALUE_SHORT:
+	case AST_VALUE_USHORT:
+		return llvm::ConstantInt::get(
+			llvm::IntegerType::getInt16Ty(*nyla::llvm_context), number->value_int, number->checked_type->is_signed());
+	case AST_VALUE_INT:
+	case AST_VALUE_UINT:
+		return llvm::ConstantInt::get(
+			llvm::IntegerType::getInt32Ty(*nyla::llvm_context), number->value_int, number->checked_type->is_signed());
+	case AST_VALUE_LONG:
+	case AST_VALUE_ULONG:
+		return llvm::ConstantInt::get(
+			llvm::IntegerType::getInt64Ty(*nyla::llvm_context), number->value_int, number->checked_type->is_signed());
 	case AST_VALUE_FLOAT:
 		return llvm::ConstantFP::get(*nyla::llvm_context, llvm::APFloat(number->value_float));
 	case AST_VALUE_DOUBLE:
@@ -267,7 +308,7 @@ llvm::Value* llvm_generator::gen_string(nyla::astring* str) {
 	var_alloca = tmp_builder.CreateAlloca(
 		array_type,
 		llvm::ConstantInt::get(
-			llvm::IntegerType::getInt32Ty(*nyla::llvm_context), array_size, false),                                    // Array size
+			llvm::IntegerType::getInt32Ty(*nyla::llvm_context), array_size, false),
 		"arrt");
 	tmp_builder.CreateStore(arr, var_alloca);
 	
@@ -280,14 +321,26 @@ llvm::Value* llvm_generator::gen_binary_op(nyla::abinary_op* binary_op) {
 	switch (binary_op->op) {
 	case '=': {
 		nyla::avariable* variable = dynamic_cast<nyla::avariable*>(binary_op->lhs);
-		llvm::Value* ll_variable  = m_sym_table.get_alloca(variable);
-		llvm::Value* ll_value     = gen_expression(binary_op->rhs);
-		nyla::llvm_builder->CreateStore(ll_value, ll_variable);
-		return ll_value; // In case of multiple assignments they
-						 // may assign the value assigned lower on the tree.
-						 // Ex.     a = b = c + 5;    c + 5 Value is returned
-						 //                           which is then used to assign
-						 //                           a and b.
+		llvm::AllocaInst* ll_variable =
+			m_sym_table.get_declared_variable(m_scope, variable)->ll_alloca;
+		if (binary_op->rhs->tag == AST_ARRAY) {
+			return gen_array(dynamic_cast<nyla::aarray*>(binary_op->rhs), ll_variable);
+		} else {
+			llvm::Value* ll_value = gen_expression(binary_op->rhs);
+			nyla::llvm_builder->CreateStore(ll_value, ll_variable);
+			return ll_value; // In case of multiple assignments they
+							 // may assign the value assigned lower on the tree.
+							 // Ex.     a = b = c + 5;    c + 5 Value is returned
+							 //                           which is then used to assign
+							 //                           a and b.
+		}
+	}
+	case TK_ARRAY_LENGTH: {
+		nyla::avariable* declared_variable = m_sym_table.get_declared_variable(m_scope,
+			dynamic_cast<nyla::avariable*>(binary_op->lhs));
+		nyla::anumber* dimension_index = dynamic_cast<nyla::anumber*>(binary_op->rhs);
+		return declared_variable->ll_arr_sizes[declared_variable->ll_arr_sizes.size() - dimension_index->value_int - 1];
+		break;
 	}
 	case '+': {
 		llvm::Value* ll_lhs = gen_expression(binary_op->lhs);
@@ -317,7 +370,11 @@ llvm::Value* llvm_generator::gen_binary_op(nyla::abinary_op* binary_op) {
 		llvm::Value* ll_lhs = gen_expression(binary_op->lhs);
 		llvm::Value* ll_rhs = gen_expression(binary_op->rhs);
 		if (binary_op->checked_type->is_int()) {
-			return nyla::llvm_builder->CreateSDiv(ll_lhs, ll_rhs, "divt");
+			if (binary_op->checked_type->is_signed()) {
+				return nyla::llvm_builder->CreateSDiv(ll_lhs, ll_rhs, "divt");
+			} else {
+				return nyla::llvm_builder->CreateUDiv(ll_lhs, ll_rhs, "divt");
+			}
 		}
 		return nyla::llvm_builder->CreateFDiv(ll_lhs, ll_rhs, "divft");
 	}
@@ -366,6 +423,8 @@ llvm::Value* llvm_generator::gen_variable_decl(nyla::avariable_decl* variable_de
 
 llvm::Value* llvm_generator::gen_for_loop(nyla::afor_loop* for_loop) {
 	
+	m_scope = for_loop->scope;
+
 	// Generating declarations before entering the loop
 	for (nyla::avariable_decl* var_decl : for_loop->declarations) {
 		gen_variable_decl(var_decl);
@@ -401,21 +460,23 @@ llvm::Value* llvm_generator::gen_for_loop(nyla::afor_loop* for_loop) {
 	// the loop
 	nyla::llvm_builder->SetInsertPoint(ll_finish_bb);
 	
+	m_scope = m_scope->parent;
+
 	return nullptr;
 }
 
 llvm::Value* llvm_generator::gen_variable(nyla::avariable* variable) {
 	// Assumed that the variable is already loaded and in scope!
 	return nyla::llvm_builder->CreateLoad(
-		m_sym_table.get_alloca(variable),
+		m_sym_table.get_declared_variable(m_scope, variable)->ll_alloca,
 		variable->name.c_str());;
 }
 
 llvm::Value* llvm_generator::gen_type_cast(nyla::atype_cast* type_cast) {
-	nyla::type* val_type       = type_cast->value->checked_type;
-	nyla::type* cast_to_type = type_cast->checked_type;
-	llvm::Value* ll_val      = gen_expression(type_cast->value);
-	llvm::Type* ll_cast_type = gen_type(type_cast->checked_type);
+	nyla::type*  val_type     = type_cast->value->checked_type;
+	nyla::type*  cast_to_type = type_cast->checked_type;
+	llvm::Value* ll_val       = gen_expression(type_cast->value);
+	llvm::Type*  ll_cast_type = gen_type(type_cast->checked_type);
 	
 	if (val_type->is_int() && cast_to_type->is_int()) {
 		if (cast_to_type->get_mem_size() < val_type->get_mem_size()) {
@@ -425,6 +486,9 @@ llvm::Value* llvm_generator::gen_type_cast(nyla::atype_cast* type_cast) {
 			if (cast_to_type->is_signed()) {
 				// Signed upcasting
 				return nyla::llvm_builder->CreateSExt(ll_val, ll_cast_type, "supcastt");
+			} else {
+				// Unsigned upcasting
+				return nyla::llvm_builder->CreateZExt(ll_val, ll_cast_type, "uuocastt");
 			}
 		}
 	} else if (cast_to_type->is_float() && val_type->is_int()) {
@@ -458,13 +522,56 @@ llvm::Value* llvm_generator::gen_type_cast(nyla::atype_cast* type_cast) {
 	return nullptr;
 }
 
+llvm::Value* llvm_generator::gen_array(nyla::aarray* arr, llvm::AllocaInst* llvm_arr) {
+	// TODO: might want to use memcpy or something to move the values into the array instead
+	for (u64 index = 0; index < arr->elements.size(); index++) {
+		llvm::Value* gep = nyla::llvm_builder->CreateGEP(llvm_arr, llvm::ConstantInt::get(
+			llvm::IntegerType::getInt64Ty(*nyla::llvm_context), index, false));	
+		nyla::llvm_builder->CreateStore(gen_expression(arr->elements[index]), gep);
+	}
+	return nullptr;
+}
+
+llvm::Value* llvm_generator::gen_array_access(nyla::aarray_access* array_access) {
+	nyla::avariable* decl_variable = m_sym_table.get_declared_variable(m_scope, array_access->variable);
+	// Have to reverse indexes since original order is [fst][snd][...] but
+	// the offsets are the opposite.
+	std::vector<nyla::aexpr*> indexes = array_access->indexes;
+	llvm::Value* total_index_offset =
+		gen_expression(indexes[indexes.size()-1]);
+	for (s32 i = indexes.size() - 2; i >= 0; i--) {
+		llvm::Value* arr_index = gen_expression(array_access->indexes[i]);
+		llvm::Value* index_offset =
+			nyla::llvm_builder->CreateMul(arr_index, decl_variable->ll_arr_mem_offsets[i]);
+		total_index_offset = nyla::llvm_builder->CreateAdd(total_index_offset, index_offset);
+	}
+	llvm::Value* gep = nyla::llvm_builder->CreateGEP(decl_variable->ll_alloca, total_index_offset);
+	return nyla::llvm_builder->CreateLoad(gep);
+}
+
 llvm::AllocaInst* llvm_generator::gen_alloca(nyla::avariable* variable) {
 	llvm::IRBuilder<> tmp_builder(m_bb, m_bb->begin());
 	llvm::AllocaInst* var_alloca;
+	llvm::Value* array_size = nullptr;
+	std::vector<nyla::aexpr*> array_depths = variable->checked_type->array_depths;
+	if (array_depths.size() > 1)
+		variable->ll_arr_mem_offsets.reserve(array_depths.size()-1);
+	// The size of the array is the sum of multiples
+	// of it's depths
+	if (variable->checked_type->is_arr()) {
+		array_size = gen_expression(array_depths[array_depths.size() -1]);
+		variable->ll_arr_sizes.push_back(array_size);
+		for (s32 i = array_depths.size()-2; i >= 0; i--) {
+			llvm::Value* dimension_size = gen_expression(variable->checked_type->array_depths[i]);
+			variable->ll_arr_sizes.push_back(dimension_size);
+			variable->ll_arr_mem_offsets.push_back(array_size);
+			array_size = nyla::llvm_builder->CreateMul(array_size, dimension_size);
+		}
+	}
 	var_alloca = tmp_builder.CreateAlloca(
 		gen_type(variable->checked_type),
-		nullptr,                                    // Array size
+		array_size,
 		variable->name.c_str());
-	m_sym_table.store_alloca(variable, var_alloca);
+	variable->ll_alloca = var_alloca;
 	return var_alloca;
 }
