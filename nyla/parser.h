@@ -59,10 +59,12 @@ namespace nyla {
 		/// </summary>
 		std::vector<avariable_decl*> parse_variable_assign_list();
 
+		nyla::aexpr* parse_function_stmt();
+
 		/// <summary>
 		/// Parses statements such as return, if, ect...
 		/// </summary>
-		nyla::aexpr* parse_function_stmt();
+		nyla::aexpr* parse_function_stmt_rest();
 
 		/// <summary>
 		/// for_loop = for assign_list? ';' expression? ';' expression? '{' function_stmt* '}'
@@ -76,9 +78,9 @@ namespace nyla {
 		nyla::aexpr* on_binary_op(nyla::token* op_token,
 				                  nyla::aexpr* lhs, nyla::aexpr* rhs);
 
-		nyla::aexpr* parse_expression(bool undo_recovery = true);
+		nyla::aexpr* parse_expression();
 
-		nyla::aexpr* parse_expression(nyla::aexpr* lhs, bool undo_recovery = true);
+		nyla::aexpr* parse_expression(nyla::aexpr* lhs);
 
 		nyla::afunction_call* parse_function_call(nyla::name& name, nyla::token* start_token);
 
@@ -150,9 +152,10 @@ namespace nyla {
 		u32              m_array_depth      = 0;
 		bool             m_array_too_deep   = false;
 
+		bool             m_recovery_accept_brackets = false;
+		bool             m_error_recovery   = false;
 		nyla::token*     m_current          = nullptr;
 		bool             m_found_ret        = false;
-		bool             m_error_recovery   = false;
 
 	};
 

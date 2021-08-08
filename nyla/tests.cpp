@@ -187,6 +187,8 @@ void run_llvm_gen_tests() {
 	nyla::for_files(L"resources/*", [](const std::string& fpath) {
 		// TODO make sure they are .nyla files
 		
+		//if (fpath != "errors.nyla") return;
+
 		std::cout << "Attempting to parse: " << fpath << std::endl;
 
 		c8* buffer;
@@ -209,6 +211,8 @@ void run_llvm_gen_tests() {
 		
 		std::cout << file_unit << std::endl;
 		if (log.get_num_errors() != 0) {
+			auto it = program_err_codes.find(fpath);
+			check_tof(it == program_err_codes.end(), "Program should have errors");
 			return;
 		}
 		

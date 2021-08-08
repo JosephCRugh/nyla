@@ -98,7 +98,6 @@ bool check_tof(bool tof, c_string extra_info) {
 	return tof;
 }
 
-
 void test(c_string name) {
 	ulen name_len = strlen(name);
 	if (name_len % 2 != 0) {

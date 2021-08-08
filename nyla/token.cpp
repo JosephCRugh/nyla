@@ -2,15 +2,16 @@
 
 std::string nyla::token_tag_to_string(u32 tag) {
 	switch (tag) {
-	case TK_PLUS_EQ:    return "+=";
-	case TK_MINUS_EQ:   return "-=";
-	case TK_DIV_EQ:     return "/=";
-	case TK_MUL_EQ:     return "*=";
-	case TK_IDENTIFIER: return "identifier";
-	case TK_VALUE_INT:  return "int value";
+	case TK_PLUS_EQ:      return "+=";
+	case TK_MINUS_EQ:     return "-=";
+	case TK_DIV_EQ:       return "/=";
+	case TK_MUL_EQ:       return "*=";
+	case TK_IDENTIFIER:   return "identifier";
+	case TK_VALUE_INT:    return "int value";
 	case TK_VALUE_FLOAT:  return "float value";
-	case TK_VALUE_DOUBLE:  return "double value";
+	case TK_VALUE_DOUBLE: return "double value";
 	case TK_ARRAY_LENGTH: return "array.length";
+	case TK_EOF:          return "end of file";
 	default:
 		if (tag < TK_UNKNOWN)
 			return std::string(1, tag);
@@ -49,6 +50,7 @@ void nyla::setup_tokens() {
 		{ nyla::name::make("return")   , nyla::TK_RETURN      },
 		{ nyla::name::make("dllimport"), nyla::TK_DLLIMPORT   },
 		{ nyla::name::make("external") , nyla::TK_EXTERNAL    },
+		{ nyla::name::make("cast")     , nyla::TK_CAST        }
 	};
 	for (auto it = reserved_words.begin(); it != reserved_words.end(); it++) {
 		reversed_reserved_words[it->second] = it->first;

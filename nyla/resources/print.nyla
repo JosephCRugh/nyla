@@ -14,7 +14,7 @@ int main() {
 	int* handle = GetStdHandle(STD_OUTPUT_HANDLE);
 
 	char16* myString = "Wow! How did we get here!\n";
-	long* charsWritten = long*(0);
-	WriteConsoleW(handle, myString, long(26), charsWritten, int*(0));
+	long* charsWritten = cast(long*) 0;
+	WriteConsoleW(handle, myString, cast(long) 26, charsWritten, cast(int*) 0);
 	return 0;
 }

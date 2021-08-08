@@ -4,9 +4,9 @@ int main() {
 	
 	int l = 5 + for;
 	
-	int a = int((32.42);
+	int a = cast(int) ((32.42);
 	
-	``23.123
+	23.123
 	
 	`` redeclaration error
 	int l = 7;
@@ -24,19 +24,23 @@ int main() {
 	}
 	
 	for a; ; {}
-
+	
 	`` Array dimension mismatch
 	int[][] arr = { { { 5 } } };
 	`` Incompatible elements
 	int[] arr1 = { 3, 1, 4.0 };
-
+	
 	`` Should be implicit [4] should be []
 	int[4] arr2 = { 1, 2, 3, 4 };
-
+	
 	int[][][][][][][][][][][][][][][] OK;
-
+	
 	int************************** WAY_TOO_MANY;
-
+	
 	int g = { { { { { { { { { } } } } } } } } };
+
+	int[] itdobe = { rr + };
+
+	int[124 + ] rtjh;
 
 }

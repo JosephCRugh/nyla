@@ -19,6 +19,8 @@ namespace nyla {
 		TK_DLLIMPORT,
 		TK_EXTERNAL,
 
+		TK_CAST,
+
 		// Types
 
 		TK_TYPE_BYTE,

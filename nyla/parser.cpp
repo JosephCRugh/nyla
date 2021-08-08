@@ -78,6 +78,10 @@ nyla::afunction* nyla::parser::parse_function() {
 	m_found_ret = false;
 	match('{');
 	while (m_current->tag != '}' && m_current->tag != TK_EOF) {
+		if (m_current->tag == ';') {
+			match_semis(); // Could be semis without a statement
+			continue;
+		}
 		function->scope->stmts.push_back(parse_function_stmt());
 	}
 	match('}');
@@ -137,6 +141,7 @@ nyla::type* parser::parse_type() {
 	case '[': {
 		std::vector<nyla::aexpr*> array_depths;
 		bool more_array_depths = false;
+		m_recovery_accept_brackets = true;
 		do {
 			match('[');
 			if (m_current->tag == ']') {
@@ -149,11 +154,16 @@ nyla::type* parser::parse_type() {
 			match(']');
 			more_array_depths = m_current->tag == '[';
 		} while (more_array_depths);
+		m_recovery_accept_brackets = false;
 		if (array_depths.size() > MAX_MEM_DEPTH) {
 			produce_error(ERR_TOO_MANY_ARRAY_SUBSCRIPTS, nullptr, st, m_current);
 			array_depths.resize(MAX_MEM_DEPTH);
 		}
-		type = type->as_arr(array_depths);
+		if (m_error_recovery) {
+			type = nyla::type::get_error();
+		} else {
+			type = type->as_arr(array_depths);
+		}
 		break;
 	}
 	default:
@@ -218,7 +228,20 @@ std::vector<avariable_decl*> nyla::parser::parse_variable_assign_list() {
 	return decl_list;
 }
 
-nyla::aexpr* parser::parse_function_stmt() {
+/*-----------------------------*\
+ *     STATEMENT PARSING       *
+\*-----------------------------*/
+
+nyla::aexpr* nyla::parser::parse_function_stmt() {
+	if (m_current->tag == ';') {
+		match_semis();
+	}
+	nyla::aexpr* expr = parse_function_stmt_rest();
+	m_error_recovery = false;
+	return expr;
+}
+
+nyla::aexpr* parser::parse_function_stmt_rest() {
 	switch (m_current->tag) {
 	case TK_RETURN: {
 		nyla::areturn* ret = make_node<nyla::areturn>(AST_RETURN, m_current, m_current);
@@ -249,7 +272,9 @@ nyla::aexpr* parser::parse_function_stmt() {
 			match('=', false);
 			variable_decl->assignment = parse_expression(variable_decl->variable);
 		}
-		match_semis();
+		if (!m_error_recovery) {
+			match_semis();
+		}
 		return variable_decl;
 	}
 	case TK_IDENTIFIER: {
@@ -266,10 +291,6 @@ nyla::aexpr* parser::parse_function_stmt() {
 		}
 		break;
 	}
-	case ';': {
-		match_semis();
-		return parse_function_stmt();
-	}
 	default: {
 		produce_error(
 			ERR_EXPECTED_STMT,
@@ -283,6 +304,21 @@ nyla::aexpr* parser::parse_function_stmt() {
 }
 
 nyla::aexpr* nyla::parser::parse_for_loop() {
+
+#define CASE_ERR_RET_AST_ERR() \
+if (m_error_recovery &&        \
+    m_current->tag != ';') {   \
+	loop->tag = AST_ERROR;     \
+    m_sym_table.pop_scope();   \
+	return loop;               \
+}
+// for expr? ; expr? ; expr?
+//      ^
+//      |
+///  error! AND not current = ';'
+//   then must be a different statement!
+//   stop processing for loop
+
 	nyla::afor_loop* loop = make_node<nyla::afor_loop>(AST_FOR_LOOP, m_current, m_current);
 	// Need to create a new scope early so declarations are placed
 	// there instead of on the outside of the loop
@@ -292,6 +328,7 @@ nyla::aexpr* nyla::parser::parse_for_loop() {
 	if (m_current->tag != ';') {
 		loop->declarations = parse_variable_assign_list();
 	}
+	CASE_ERR_RET_AST_ERR()
 	match(';');
 	if (m_current->tag != ';') {
 		loop->cond = parse_expression();
@@ -301,22 +338,38 @@ nyla::aexpr* nyla::parser::parse_for_loop() {
 		always_true->tof = true;
 		loop->cond = always_true;
 	}
+	CASE_ERR_RET_AST_ERR()
 	match(';');
 	nyla::aexpr* post = nullptr;
 	if (m_current->tag != '{') {
 		post = parse_expression();
 	}
-	match('{');
-	while (m_current->tag != '}' && m_current->tag != TK_EOF) {
+	if (m_current->tag == '{') {
+		match('{');
+		while (m_current->tag != '}' && m_current->tag != TK_EOF) {
+			if (m_current->tag == ';') {
+				match_semis(); // Could be semis without a statement
+				continue;
+			}
+			loop->scope->stmts.push_back(parse_function_stmt());
+		}
+		match('}');
+	} else {
+		// Single statement
+		//   for expr ; expr ; expr   stmt
 		loop->scope->stmts.push_back(parse_function_stmt());
 	}
 	if (post) {
 		loop->scope->stmts.push_back(post);
 	}
-	match('}');
 	m_sym_table.pop_scope();
 	return loop;
+#undef CASE_ERR_RET_AST_ERR
 }
+
+/*-----------------------------*\
+ *     EXPRESSION PARSING      *
+\*-----------------------------*/
 
 std::unordered_set<u32> binary_ops_set = {
 	'+', '-', '*', '/', '=', '<', '>',
@@ -373,29 +426,24 @@ nyla::aexpr* nyla::parser::parse_factor() {
 	}
 	case '(': {
 		match('(');
-		nyla::aexpr* expr = parse_expression(false);
-		if (m_error_recovery) return expr;
+		nyla::aexpr* expr = parse_expression();
 		match(')');
 		return expr;
 	}
-	case TK_TYPE_BYTE:  case TK_TYPE_SHORT:
-	case TK_TYPE_INT:   case TK_TYPE_LONG:
-	case TK_TYPE_FLOAT: case TK_TYPE_DOUBLE:
-	case TK_TYPE_BOOL:  case TK_TYPE_VOID: {
-		// Type casting
+	case TK_CAST: {
+		next_token(); // consuming 'cast' keyword
 		nyla::atype_cast* type_cast = make_node<nyla::atype_cast>(AST_TYPE_CAST, m_current, m_current);
-		type_cast->checked_type = parse_type();
 		match('(');
-		type_cast->value = parse_expression(false);
-		if (m_error_recovery) return type_cast;
+		type_cast->checked_type = parse_type();
 		match(')');
+		type_cast->value = parse_expression();
 		return type_cast;
 	}
 	case TK_IDENTIFIER: {
 		nyla::token* identifier_token = m_current;
 		nyla::name name = parse_identifier();
 		switch (m_current->tag) { 
-		case  '(':
+		case '(':
 			return parse_function_call(name, identifier_token);
 		case '[':
 			return parse_array_access(name, identifier_token);
@@ -417,8 +465,7 @@ nyla::aexpr* nyla::parser::parse_factor() {
 			error_data::make_token_tag_load(m_current->tag),
 			m_current, m_current
 		);
-		next_token(); // consuming the unknown factor
-		m_error_recovery = true;
+		skip_recovery();
 		return make_node<nyla::err_expr>(AST_ERROR, m_current, m_current);
 	}
 	}
@@ -481,18 +528,12 @@ nyla::aexpr* parser::on_binary_op(nyla::token* op_token,
 	}
 }
 
-nyla::aexpr* parser::parse_expression(bool undo_recovery) {
-	return parse_expression(parse_unary(), undo_recovery);
+nyla::aexpr* parser::parse_expression() {
+	return parse_expression(parse_unary());
 }
 
-nyla::aexpr* parser::parse_expression(nyla::aexpr* lhs, bool undo_recovery) {
+nyla::aexpr* parser::parse_expression(nyla::aexpr* lhs) {
 	
-	if (m_error_recovery) {
-		skip_recovery();
-		if (undo_recovery)  m_error_recovery = false;
-		return make_node<nyla::err_expr>(AST_ERROR, m_current, m_current);
-	}
-
 	nyla::token* op = m_current;
 	nyla::token* next_op;
 
@@ -506,11 +547,6 @@ nyla::aexpr* parser::parse_expression(nyla::aexpr* lhs, bool undo_recovery) {
 		next_token(); // Consuming the operator.
 	
 		nyla::aexpr* rhs = parse_unary();
-		if (m_error_recovery) {
-			skip_recovery();
-			if (undo_recovery)  m_error_recovery = false;
-			return make_node<nyla::err_expr>(AST_ERROR, m_current, m_current);
-		}
 		
 		next_op = m_current;
 		bool more_operators = binary_ops_set.find(next_op->tag) != binary_ops_set.end();
@@ -560,12 +596,9 @@ nyla::afunction_call* parser::parse_function_call(nyla::name& name, nyla::token*
 		bool more_expressions = false;
 		do {
 			function_call->parameter_values.push_back(
-				parse_expression(false)
+				parse_expression()
 			);
-			if (m_error_recovery) {
-				return function_call;
-			}
-
+			
 			more_expressions = m_current->tag == ',';
 			if (more_expressions) {
 				next_token(); // Consuming ,
@@ -660,12 +693,14 @@ nyla::aarray_access* parser::parse_array_access(nyla::name& name, nyla::token* s
 	variable->name = name;
 	array_access->variable = variable;
 	bool more_subscripts = false;
+	m_recovery_accept_brackets = true;
 	do {
 		match('[');
-		array_access->indexes.push_back(parse_expression(false));
+		array_access->indexes.push_back(parse_expression());
 		match(']');
 		more_subscripts = m_current->tag == '[';
 	} while (more_subscripts);
+	m_recovery_accept_brackets = false;
 	array_access->et = look_back(1);
 	return array_access;
 }
@@ -685,7 +720,7 @@ void nyla::parser::parse_dll_import() {
 
 nyla::token* parser::peek_token(u32 n) {
 	if (n == 0) {
-		assert(!"There is no reason to peek a single token");
+		assert(!"There is no reason to peek zero tokens");
 	}
 	for (u32 i = 0; i < n; i++) {
 		m_saved_tokens.push(m_lexer.next_token());
@@ -725,18 +760,30 @@ void parser::match_semis() {
 }
 
 void nyla::parser::skip_recovery() {
+	m_error_recovery = true;
 	// Eating tokens till we find something sensical that
 	// could begin another statement.
 	while (true) {
 		switch (m_current->tag) {
+		case '[':
+		case ']': {
+			if (m_recovery_accept_brackets) {
+				return;
+			}
+			break;
+		}
 		case ';':
+		
+			// TODO: might not always want to stop here?
+		case '{': case '}':
+
 		case TK_EOF:
-		case '}':
-		case ',':
+			// Statement keywords
 		case TK_FOR:
 		case TK_IF:
 		case TK_WHILE:
 		case TK_SWITCH:
+			// Types
 		case TK_TYPE_BYTE:
 		case TK_TYPE_SHORT:
 		case TK_TYPE_INT:

@@ -147,14 +147,13 @@ void analysis::type_check_number(nyla::anumber* number) {
 
 void analysis::type_check_binary_op(nyla::abinary_op* binary_op) {
 	
-
-	type_check_expression(binary_op->lhs);
-
 	// Must have already been dealt with.
 	if (binary_op->lhs->tag == AST_ERROR || binary_op->rhs->tag == AST_ERROR) {
 		binary_op->checked_type = nyla::type::get_error();
 		return;
 	}
+
+	type_check_expression(binary_op->lhs);
 
 	nyla::type* lhs_checked_type = binary_op->lhs->checked_type;
 
