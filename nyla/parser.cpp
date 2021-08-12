@@ -43,7 +43,7 @@ nyla::afunction* parser::parse_function_decl(bool make_new_scope) {
 
 	nyla::afunction* function = make_node<nyla::afunction>(AST_FUNCTION, m_current, m_current);
 	function->return_type = return_type;
-	function->name        = parse_identifier();
+	function->ident        = parse_identifier();
 	
 	// Needed here so that the parameters declarations are registered
 	// in the function scope.
@@ -123,39 +123,50 @@ nyla::type* parser::parse_type() {
 		);
 		break;
 	}
-	switch (m_current->tag) {
-	case '*': {
-		// TODO Avoid void pointers
-		u32 ptr_depth = 0;
+	if (m_current->tag == '*') {
+		match('*');
+		nyla::type* fst_ptr_type = nyla::type::get_ptr(nullptr);
+		nyla::type* cur_ptr_type = fst_ptr_type;
 		while (m_current->tag == '*') {
-			++ptr_depth;
-			next_token(); // Consuming *
+			match('*');
+			nyla::type* ptr_type = nyla::type::get_ptr(nullptr);
+			cur_ptr_type->elem_type = ptr_type;
+			cur_ptr_type = ptr_type;
 		}
-		if (ptr_depth > MAX_MEM_DEPTH) {
-			produce_error(ERR_TOO_MANY_PTR_SUBSCRIPTS, nullptr, st, m_current);
-			ptr_depth = MAX_MEM_DEPTH;
-		}
-		type = type->as_ptr(ptr_depth);
-		break;
+		cur_ptr_type->elem_type = type;
+		type = fst_ptr_type;
+		type->calculate_ptr_depth();
 	}
-	case '[': {
-		std::vector<nyla::aexpr*> array_depths;
-		bool more_array_depths = false;
+	if (m_current->tag == '[') {
+		// fst
+		// match(token1)
+		// process( fst )
+		// match(token2)
+		// cur = fst
+		// while (token1)
+		// match(token1)
+		// process( nth )
+		// cur.ptr = nth
+		// cur = nth
+		// match(token2)
 		m_recovery_accept_brackets = true;
-		do {
+		match('[');
+		nyla::type* fst_arr_type = nyla::type::get_arr(nullptr, m_current->tag != ']' ?
+			parse_expression() : nullptr);
+		match(']');
+		nyla::type* cur_arr_type = fst_arr_type;
+		while (m_current->tag == '[') {
 			match('[');
-			if (m_current->tag == ']') {
-				array_depths.push_back(0);
-			} else {
-				nyla::aexpr* size = parse_expression();
-				// TODO: recovery
-				array_depths.push_back(size);
-			}
+			nyla::type* arr_type = nyla::type::get_arr(nullptr, m_current->tag != ']' ?
+				parse_expression() : nullptr);
+			cur_arr_type->elem_type = arr_type;
+			cur_arr_type = arr_type;
 			match(']');
-			more_array_depths = m_current->tag == '[';
-		} while (more_array_depths);
-		m_recovery_accept_brackets = false;
-		if (array_depths.size() > MAX_MEM_DEPTH) {
+		}
+		cur_arr_type->elem_type = type;
+		type = fst_arr_type;
+		type->calculate_arr_depth();
+		/*if (array_depths.size() > MAX_MEM_DEPTH) {
 			produce_error(ERR_TOO_MANY_ARRAY_SUBSCRIPTS, nullptr, st, m_current);
 			array_depths.resize(MAX_MEM_DEPTH);
 		}
@@ -163,28 +174,26 @@ nyla::type* parser::parse_type() {
 			type = nyla::type::get_error();
 		} else {
 			type = type->as_arr(array_depths);
-		}
-		break;
-	}
-	default:
-		break;
+		}*/
 	}
 	type->st = st;
 	type->et = m_current;
 	return type;
 }
 
-nyla::name parser::parse_identifier() {
+nyla::aidentifier* parser::parse_identifier() {
+	nyla::aidentifier* identifier = make_node<nyla::aidentifier>(AST_IDENTIFIER, m_current, m_current);
 	if (m_current->tag == TK_IDENTIFIER) {
 		nyla::name name = dynamic_cast<nyla::word_token*>(m_current)->name;
 		next_token(); // Consuming identifier
-		return name;
-	} else {
-		produce_error(ERR_EXPECTED_IDENTIFIER,
-			error_data::make_empty_load(),
-			look_back(1), look_back(1));
+		identifier->name = name;
+		return identifier;
 	}
-	return nyla::name();
+	produce_error(ERR_EXPECTED_IDENTIFIER,
+		error_data::make_empty_load(),
+		look_back(1), look_back(1));
+	identifier->tag = AST_ERROR;
+	return identifier;
 }
 
 nyla::avariable_decl* nyla::parser::parse_variable_decl(bool has_scope) {
@@ -192,17 +201,23 @@ nyla::avariable_decl* nyla::parser::parse_variable_decl(bool has_scope) {
 }
 
 nyla::avariable_decl* nyla::parser::parse_variable_decl(nyla::type* type, bool has_scope) {
-	nyla::avariable* variable =
-		make_node<nyla::avariable>(AST_VARIABLE, m_current, m_current);
-	variable->checked_type = type;
-	variable->name = parse_identifier();
+	nyla::aidentifier* identifier = parse_identifier();
+	nyla::avariable* variable = make_node<nyla::avariable>(AST_VARIABLE, identifier->st, identifier->et);
+	variable->checked_type = type;	
+	variable->ident = identifier;
 	nyla::avariable_decl* variable_delc =
 		make_node<nyla::avariable_decl>(AST_VARIABLE_DECL, type->st, variable->st);
 	variable_delc->variable = variable;
+	variable_delc->checked_type = variable->checked_type;
+
+	if (identifier->tag == AST_ERROR) {
+		return variable_delc;
+	}
+
 	if (has_scope) {
 		if (m_sym_table.has_been_declared(variable)) {
 			produce_error(ERR_VARIABLE_REDECLARATION,
-				error_data::make_str_literal_load(variable->name.c_str()),
+				error_data::make_str_literal_load(variable->ident->name.c_str()),
 				type->st, variable->st);
 		} else {
 			m_sym_table.store_declared_variable(variable);
@@ -218,7 +233,7 @@ std::vector<avariable_decl*> nyla::parser::parse_variable_assign_list() {
 	do {
 		nyla::avariable_decl* var_decl = parse_variable_decl(fst_type);
 		if (m_current->tag != ';' && m_current->tag != ',')
-			var_decl->assignment = parse_expression(var_decl->variable);
+			var_decl->assignment = parse_expression(var_decl->variable->ident);
 		decl_list.push_back(var_decl);
 		more_decls = m_current->tag == ',';
 		if (more_decls) {
@@ -270,7 +285,7 @@ nyla::aexpr* parser::parse_function_stmt_rest() {
 		//        |-- no assignment
 		if (m_current->tag != ';') {
 			match('=', false);
-			variable_decl->assignment = parse_expression(variable_decl->variable);
+			variable_decl->assignment = parse_expression(variable_decl->variable->ident);
 		}
 		if (!m_error_recovery) {
 			match_semis();
@@ -424,6 +439,11 @@ nyla::aexpr* nyla::parser::parse_factor() {
 		next_token(); // Consuming the string token.
 		return str;
 	}
+	case TK_NULL: {
+		nyla::anull* null_value = make_node<nyla::anull>(AST_VALUE_NULL, m_current, m_current);
+		next_token(); // Consuming the null token.
+		return null_value;
+	}
 	case '(': {
 		match('(');
 		nyla::aexpr* expr = parse_expression();
@@ -441,21 +461,19 @@ nyla::aexpr* nyla::parser::parse_factor() {
 	}
 	case TK_IDENTIFIER: {
 		nyla::token* identifier_token = m_current;
-		nyla::name name = parse_identifier();
+		nyla::aidentifier* identifier = parse_identifier();
+		
 		switch (m_current->tag) { 
 		case '(':
-			return parse_function_call(name, identifier_token);
+			return parse_function_call(identifier, identifier_token);
 		case '[':
-			return parse_array_access(name, identifier_token);
+			return parse_array_access(identifier, identifier_token);
 		default:
 			break;
 		}
-		nyla::avariable* variable = make_node<nyla::avariable>(AST_VARIABLE,
-			identifier_token, identifier_token);
-		variable->name = name;
-
+		
 		// The type is determined during symantic analysis.
-		return variable;
+		return identifier;
 	}
 	case '{': {
 		return parse_array();
@@ -587,10 +605,10 @@ nyla::aexpr* parser::parse_expression(nyla::aexpr* lhs) {
 	return lhs;
 }
 
-nyla::afunction_call* parser::parse_function_call(nyla::name& name, nyla::token* start_token) {
+nyla::afunction_call* parser::parse_function_call(nyla::aidentifier* name, nyla::token* start_token) {
 	nyla::afunction_call* function_call = make_node<nyla::afunction_call>(
 		AST_FUNCTION_CALL, start_token, start_token);
-	function_call->name = name;
+	function_call->ident = name;
 	match('(');
 	if (m_current->tag != ')') {
 		bool more_expressions = false;
@@ -685,24 +703,31 @@ nyla::abinary_op* parser::parse_dot_op(nyla::aexpr* lhs) {
 	return dot_op;
 }
 
-nyla::aarray_access* parser::parse_array_access(nyla::name& name, nyla::token* start_token) {
-	nyla::aarray_access* array_access = make_node<nyla::aarray_access>(
+nyla::aarray_access* parser::parse_array_access(nyla::aidentifier* name, nyla::token* start_token) {
+	nyla::aarray_access* fst_array_access = make_node<nyla::aarray_access>(
 		AST_ARRAY_ACCESS, start_token, start_token);
-	nyla::avariable* variable = make_node<nyla::avariable>(AST_VARIABLE,
-		start_token, start_token);
-	variable->name = name;
-	array_access->variable = variable;
-	bool more_subscripts = false;
-	m_recovery_accept_brackets = true;
-	do {
+	
+	match('[');
+	fst_array_access->index = parse_expression();
+	fst_array_access->et = m_current;
+	fst_array_access->ident = name;
+	match(']');
+	
+	nyla::aarray_access* current = fst_array_access;
+	while (m_current->tag == '[') {
 		match('[');
-		array_access->indexes.push_back(parse_expression());
+		nyla::aarray_access* array_access = make_node<nyla::aarray_access>(
+			AST_ARRAY_ACCESS, m_current, start_token);
+		array_access->index = parse_expression();
+		array_access->et = m_current;
+		array_access->ident = name;
+		current->next = array_access;
+		current = array_access;
 		match(']');
-		more_subscripts = m_current->tag == '[';
-	} while (more_subscripts);
+	}
+
 	m_recovery_accept_brackets = false;
-	array_access->et = look_back(1);
-	return array_access;
+	return fst_array_access;
 }
 
 void nyla::parser::parse_dll_import() {

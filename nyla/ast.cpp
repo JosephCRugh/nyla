@@ -29,7 +29,7 @@ void nyla::atype_cast::print(std::ostream& os, u32 depth) const {
 // avariable
 
 void nyla::avariable::print(std::ostream& os, u32 depth) const {
-	os << expr_header(depth) << "\"" << name << "\"";
+	os << expr_header(depth) << "\"" << ident->name << "\"  ::  variable";
 }
 
 // avariable_decl
@@ -133,7 +133,9 @@ void nyla::abinary_op::print(std::ostream& os, u32 depth) const {
 
 void nyla::afunction::print(std::ostream& os, u32 depth) const {
 	os << std::string(depth * 4, ' ');
-	os << "function: " << name << std::endl;
+	os << "function: ";
+	ident->print(os, depth);
+	os << std::endl;
 	if (scope != nullptr) {
 		scope->print(os, depth + 1);
 	}
@@ -142,7 +144,7 @@ void nyla::afunction::print(std::ostream& os, u32 depth) const {
 // afunction_call
 
 void nyla::afunction_call::print(std::ostream& os, u32 depth) const {
-	os << expr_header(depth) << "function call: " << name << std::endl;
+	os << expr_header(depth) << "function call: " << ident->name << std::endl;
 	for (nyla::aexpr* parameter_value : parameter_values) {
 		parameter_value->print(os, depth + 1);
 		os << std::endl;
@@ -181,17 +183,34 @@ void nyla::aarray::print(std::ostream& os, u32 depth) const {
 
 void aarray_access::print(std::ostream& os, u32 depth) const {
 	os << expr_header(depth) << "array_access: ";
-	variable->print(os, 0);
+	if (checked_type) {
+		os << *checked_type;
+	}
 	os << std::endl;
-	for (nyla::aexpr* index : indexes) {
-		index->print(os, depth + 1);
-		os << std::endl;
+	ident->print(os, depth + 1);
+	os << std::endl;
+	index->print(os, depth + 1);
+	os << std::endl;
+	if (next) {
+		next->print(os, depth + 1);
 	}
 }
 
 // aaexpr
 
-std::string nyla::aexpr::expr_header(u32 depth) const {
+std::string aexpr::expr_header(u32 depth) const {
 	return indent(depth) + "(" + (checked_type != nullptr ? "1" : "0") + ") ";
 }
 
+// anull
+
+void anull::print(std::ostream& os, u32 depth) const {
+	os << expr_header(depth) << "null";
+}
+
+void nyla::aidentifier::print(std::ostream& os, u32 depth) const {
+	os << expr_header(depth) << "\"" << name << "\"";
+	if (variable) {
+		os << "  ::   found_declaration";
+	}
+}

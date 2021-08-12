@@ -48,8 +48,6 @@ namespace nyla {
 
 		llvm::Value* gen_number(nyla::anumber* number);
 
-		llvm::Value* gen_string(nyla::astring* str);
-
 		llvm::Value* gen_binary_op(nyla::abinary_op* binary_op);
 
 		llvm::Value* gen_unary_op(nyla::aunary_op* unary_op);
@@ -58,11 +56,13 @@ namespace nyla {
 
 		llvm::Value* gen_for_loop(nyla::afor_loop* for_loop);
 
+		llvm::Value* gen_identifier(nyla::aidentifier* identifier);
+
 		llvm::Value* gen_variable(nyla::avariable* variable);
 
 		llvm::Value* gen_type_cast(nyla::atype_cast* type_cast);
 
-		llvm::Value* gen_array(nyla::aarray* arr, llvm::AllocaInst* llvm_arr);
+		llvm::Value* gen_array(nyla::aarray* arr, llvm::Value* ptr_to_arr);
 
 		llvm::Value* gen_array_access(nyla::aarray_access* array_access);
 
@@ -70,9 +70,12 @@ namespace nyla {
 
 		llvm::AllocaInst* gen_alloca(nyla::avariable* variable);
 
+		llvm::Value* calc_array_size(nyla::type* arr_type, nyla::avariable* variable);
+
+		void calc_array_size(nyla::avariable* arr_alloc_reference, nyla::avariable* variable);
+
 		nyla::sym_table   m_sym_table;
 		llvm::BasicBlock* m_bb;
 		llvm::Function*   m_ll_function;
-		nyla::ascope*     m_scope = nullptr;
 	};
 }

@@ -100,9 +100,9 @@ void log::error(error_tag tag, error_data* data,
 			nyla::type_mismatch_data* mismatch_data =
 				dynamic_cast<nyla::type_mismatch_data*>(data);
 			std::cerr << "Array dimension of '"
-				      << mismatch_data->found_type->array_depths.size()
+				      << mismatch_data->found_type->arr_depth
 				      << "' is not compatible with the expected dimension '"
-				      << mismatch_data->expected_type->array_depths.size() << "'";
+				      << mismatch_data->expected_type->arr_depth << "'";
 			break;
 		}
 		case ERR_ELEMENT_OF_ARRAY_NOT_COMPATIBLE_WITH_ARRAY: {

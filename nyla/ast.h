@@ -10,6 +10,7 @@ namespace nyla {
 
 	enum ast_tag {
 		AST_FUNCTION,
+		AST_IDENTIFIER,
 		AST_VARIABLE,
 		AST_VARIABLE_DECL,
 		AST_SCOPE,
@@ -26,6 +27,8 @@ namespace nyla {
 		AST_VALUE_ULONG,
 
 		AST_VALUE_CHAR16,
+
+		AST_VALUE_NULL,
 		
 		AST_VALUE_FLOAT,
 		AST_VALUE_DOUBLE,
@@ -70,8 +73,6 @@ namespace nyla {
 		nyla::type* checked_type = nullptr;
 	};
 
-	
-
 	struct err_expr : public aexpr {
 		virtual ~err_expr() {}
 		virtual void print(std::ostream& os, u32 depth) const override;
@@ -83,14 +84,24 @@ namespace nyla {
 		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
+	struct avariable; 
+	struct aidentifier : public aexpr {
+		virtual ~aidentifier() {}
+		nyla::name       name;
+		nyla::avariable* variable = nullptr; // Determined when type checking
+		virtual void print(std::ostream& os, u32 depth) const override;
+	};
+
 	struct avariable : public aexpr {
 		virtual ~avariable() {}
-		nyla::name                name;
-		llvm::AllocaInst*         ll_alloca;
+		nyla::aidentifier* ident;
+		llvm::AllocaInst*  ll_alloca;
 
-		    // Only applies if the type of the variable is an array
+			// Only applies if the type of the variable is an array
 		std::vector<llvm::Value*> ll_arr_mem_offsets;
 		std::vector<llvm::Value*> ll_arr_sizes;
+
+		nyla::avariable* arr_alloc_reference = nullptr;
 
 		virtual void print(std::ostream& os, u32 depth) const override;
 	};
@@ -152,6 +163,11 @@ namespace nyla {
 		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
+	struct anull : public aexpr {
+		virtual ~anull() {}
+		virtual void print(std::ostream& os, u32 depth) const override;
+	};
+
 	struct aarray : public aexpr {
 		virtual ~aarray() {}
 		std::vector<u64>          depths;
@@ -178,7 +194,7 @@ namespace nyla {
 	struct afunction : public ast_node {
 		virtual ~afunction() {}
 		nyla::type*                        return_type;
-		nyla::name                         name;
+		nyla::aidentifier*                 ident;
 		std::vector<nyla::avariable_decl*> parameters;
 		nyla::ascope*                      scope = nullptr;
 		llvm::Function*                    ll_function; // Needed for function calls
@@ -190,14 +206,15 @@ namespace nyla {
 
 	struct aarray_access : public aexpr {
 		virtual ~aarray_access() {}
-		nyla::avariable* variable;
-		std::vector<nyla::aexpr*> indexes;
+		nyla::aarray_access* next = nullptr;
+		nyla::aidentifier*   ident;
+		nyla::aexpr*         index;
 		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	struct afunction_call : public aexpr {
 		virtual ~afunction_call() {}
-		nyla::name                name;
+		nyla::aidentifier*        ident;
 		std::vector<nyla::aexpr*> parameter_values;
 		nyla::afunction*          called_function = nullptr;
 		virtual void print(std::ostream& os, u32 depth) const override;

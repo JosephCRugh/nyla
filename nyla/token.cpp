@@ -50,7 +50,8 @@ void nyla::setup_tokens() {
 		{ nyla::name::make("return")   , nyla::TK_RETURN      },
 		{ nyla::name::make("dllimport"), nyla::TK_DLLIMPORT   },
 		{ nyla::name::make("external") , nyla::TK_EXTERNAL    },
-		{ nyla::name::make("cast")     , nyla::TK_CAST        }
+		{ nyla::name::make("cast")     , nyla::TK_CAST        },
+		{ nyla::name::make("null")     , nyla::TK_NULL        }
 	};
 	for (auto it = reserved_words.begin(); it != reserved_words.end(); it++) {
 		reversed_reserved_words[it->second] = it->first;

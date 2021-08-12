@@ -17,7 +17,7 @@ void sym_table::pop_scope() {
 }
 
 void sym_table::store_function_decl(nyla::afunction* function) {
-	m_declared_functions[function->name] = function;
+	m_declared_functions[function->ident->name] = function;
 }
 
 nyla::afunction* sym_table::get_declared_function(nyla::name& name) {
@@ -26,13 +26,13 @@ nyla::afunction* sym_table::get_declared_function(nyla::name& name) {
 
 void sym_table::store_declared_variable(nyla::avariable* variable) {
 	nyla::ascope* cur_scope = m_scopes.top();
-	cur_scope->variables[variable->name] = variable;
+	cur_scope->variables[variable->ident->name] = variable;
 }
 
-nyla::avariable* sym_table::get_declared_variable(nyla::ascope* scope, nyla::avariable* variable) {
+nyla::avariable* sym_table::get_declared_variable(nyla::ascope* scope, nyla::aidentifier* identifier) {
 	nyla::ascope* scope_itr = scope;
 	while (scope_itr != nullptr) {
-		auto it = scope_itr->variables.find(variable->name);
+		auto it = scope_itr->variables.find(identifier->name);
 		if (it != scope_itr->variables.end()) {
 			return it->second;
 		}
@@ -46,7 +46,7 @@ bool sym_table::has_been_declared(nyla::avariable* variable) {
 	assert(!m_scopes.empty() && "Cannot check declaration without a scope");
 	nyla::ascope* scope = m_scopes.top();
 	while (scope != nullptr) {
-		if (scope->variables.find(variable->name) != scope->variables.end()) {
+		if (scope->variables.find(variable->ident->name) != scope->variables.end()) {
 			return true;
 		}
 		scope = scope->parent;

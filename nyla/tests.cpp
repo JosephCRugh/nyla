@@ -123,13 +123,13 @@ void function_decl_test(c_string text, nyla::type_tag return_type,
 	parser_setup(text)
 	nyla::afunction* function = parser.parse_function_decl(false);
 	check_eq(function->return_type->tag, return_type, "Ret. Type Check");
-	check_eq(function->name, nyla::name::make(fname));                             \
-	assert(param_types.size() == param_names.size()                                \
-		   && "The Number of names should match the number of types");            \
+	check_eq(function->ident->name, nyla::name::make(fname));
+	assert(param_types.size() == param_names.size()
+		   && "The Number of names should match the number of types"); 
 	check_eq(function->parameters.size(), param_types.size(), "Parameters Size");
 	if (function->parameters.size() == param_types.size()) {
 		for (u32 i = 0; i < function->parameters.size(); i++) {
-			check_eq(function->parameters[i]->variable->name, nyla::name::make(param_names[i]), "Parameter Name Check");
+			check_eq(function->parameters[i]->variable->ident->name, nyla::name::make(param_names[i]), "Parameter Name Check");
 			check_eq(function->parameters[i]->variable->checked_type->tag, param_types[i], "Parameter Type Check");
 		}
 	}
@@ -175,7 +175,8 @@ std::unordered_map<std::string, int> program_err_codes = {
 			}()  },
 	{ "func_call.nyla", 7+54 },
 	{ "print.nyla", 0 },
-	{ "arrays.nyla", 412 + 21 + 5 + 6 + 4 }
+	{ "arrays.nyla", 412 + 21 + 5 + 6 + 4 },
+	{ "array_pass.nyla", 3 + 6 + 4 + 7 + 8 + 4 + 8 + 4 }
 };
 
 void run_llvm_gen_tests() {
@@ -187,8 +188,6 @@ void run_llvm_gen_tests() {
 	nyla::for_files(L"resources/*", [](const std::string& fpath) {
 		// TODO make sure they are .nyla files
 		
-		//if (fpath != "errors.nyla") return;
-
 		std::cout << "Attempting to parse: " << fpath << std::endl;
 
 		c8* buffer;
@@ -205,10 +204,11 @@ void run_llvm_gen_tests() {
 		nyla::working_llvm_module = new llvm::Module("My Module", *nyla::llvm_context);
 		nyla::llvm_generator generator;
 		nyla::afile_unit* file_unit = parser.parse_file_unit();
+		std::cout << "--------- AST AFTER PARSING ---------" << std::endl;
 		std::cout << file_unit << std::endl;
 		
 		analysis.type_check_file_unit(file_unit);
-		
+		std::cout << "--------- AST AFTER ANALYSIS ---------" << std::endl;
 		std::cout << file_unit << std::endl;
 		if (log.get_num_errors() != 0) {
 			auto it = program_err_codes.find(fpath);

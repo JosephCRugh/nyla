@@ -21,7 +21,7 @@ namespace nyla {
 
 		void store_declared_variable(nyla::avariable* variable);
 
-		nyla::avariable* get_declared_variable(nyla::ascope* scope, nyla::avariable* variable);
+		nyla::avariable* get_declared_variable(nyla::ascope* scope, nyla::aidentifier* identifier);
 
 		bool has_been_declared(nyla::avariable* variable);
 

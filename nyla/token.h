@@ -20,6 +20,7 @@ namespace nyla {
 		TK_EXTERNAL,
 
 		TK_CAST,
+		TK_NULL,
 
 		// Types
 

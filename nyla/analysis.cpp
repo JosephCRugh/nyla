@@ -26,12 +26,12 @@ void analysis::type_check_function(nyla::afunction* function) {
 
 void nyla::analysis::type_check_function_call(nyla::afunction_call* function_call) {
 	nyla::afunction* called_function =
-		m_sym_table.get_declared_function(function_call->name);
+		m_sym_table.get_declared_function(function_call->ident->name);
 	function_call->is_constexpr = false; // TODO: This should be true if the called
 	                                     // function is constexpr
 	if (called_function == nullptr) {
 		produce_error(ERR_FUNCTION_NOT_FOUND,
-			error_data::make_str_literal_load(function_call->name.c_str()),
+			error_data::make_str_literal_load(function_call->ident->name.c_str()),
 			function_call
 		);
 		function_call->checked_type = nyla::type::get_error();
@@ -39,8 +39,10 @@ void nyla::analysis::type_check_function_call(nyla::afunction_call* function_cal
 	}
 	function_call->called_function = called_function;
 	function_call->checked_type = called_function->return_type;
-	for (nyla::aexpr* parameter_value : function_call->parameter_values) {
+	for (u32 i = 0; i < function_call->parameter_values.size(); i++) {
+		nyla::aexpr*& parameter_value = function_call->parameter_values[i];
 		type_check_expression(parameter_value);
+		attempt_pass_arg(parameter_value, called_function->parameters[i]->checked_type);
 	}
 }
 
@@ -48,9 +50,6 @@ void analysis::type_check_expression(nyla::aexpr* expr) {
 	switch (expr->tag) {
 	case AST_VARIABLE_DECL:
 		type_check_variable_decl(dynamic_cast<nyla::avariable_decl*>(expr));
-		break;
-	case AST_VARIABLE:
-		type_check_variable(dynamic_cast<nyla::avariable*>(expr));
 		break;
 	case AST_RETURN:
 		type_check_return(dynamic_cast<nyla::areturn*>(expr));
@@ -73,9 +72,11 @@ void analysis::type_check_expression(nyla::aexpr* expr) {
 	case AST_VALUE_DOUBLE:
 		type_check_number(dynamic_cast<nyla::anumber*>(expr));
 		break;
-	case AST_ARRAY:
-		type_check_array(dynamic_cast<nyla::aarray*>(expr));
+	case AST_ARRAY: {
+		nyla::aarray* arr = dynamic_cast<nyla::aarray*>(expr);
+		type_check_array(arr, arr->depths);
 		break;
+	}
 	case AST_VALUE_BOOL:
 		expr->checked_type = nyla::type::get_bool();
 		break;
@@ -96,6 +97,14 @@ void analysis::type_check_expression(nyla::aexpr* expr) {
 		break;
 	case AST_ARRAY_ACCESS:
 		type_check_array_access(dynamic_cast<nyla::aarray_access*>(expr));
+		break;
+	case AST_VALUE_NULL:
+		expr->checked_type = nyla::type::get_null();
+		break;
+	case AST_VARIABLE: // Already assumed type checked from declaration
+		break;
+	case AST_IDENTIFIER:
+		type_check_identifier(dynamic_cast<nyla::aidentifier*>(expr));
 		break;
 	default:
 		assert(!"Failed to implement a type check");
@@ -119,7 +128,10 @@ void analysis::type_check_return(nyla::areturn* ret) {
 			// just type assigning
 			ret->value->checked_type = m_function->return_type;
 		} else {
-			// TODO handle error
+			produce_error(ERR_CANNOT_ASSIGN,
+				type_mismatch_data::make_type_mismatch(m_function->return_type, ret->value->checked_type),
+				ret->value);
+			ret->value->checked_type = nyla::type::get_error();
 		}
 	}
 }
@@ -179,25 +191,27 @@ void analysis::type_check_binary_op(nyla::abinary_op* binary_op) {
 			if (binary_op->rhs->tag == AST_ARRAY_ACCESS) {
 				nyla::aarray_access* dimension_access =
 					dynamic_cast<nyla::aarray_access*>(binary_op->rhs);
-				if (dimension_access->variable->name != nyla::name::make("length")) {
+				nyla::aidentifier* ident = dynamic_cast<nyla::aidentifier*>(dimension_access->ident);
+
+				if (ident->name != nyla::name::make("length")) {
 					produce_error(ERR_DOT_OP_ON_ARRAY_EXPECTS_LENGTH, nullptr, binary_op);
 					binary_op->checked_type = nyla::type::get_error();
 					return;
 				}
 
-				if (dimension_access->indexes.size() > 1) {
+				if (dimension_access->next) {
 					produce_error(ERR_ARRAY_LENGTH_OPERATOR_EXPECTS_SINGLE_DIM, nullptr, binary_op);
 					binary_op->checked_type = nyla::type::get_error();
 					return;
 				}
-				nyla::aexpr* dimension_expr = dimension_access->indexes[0];
+				nyla::aexpr* dimension_expr = dimension_access->index;
 				if (dimension_expr->tag != AST_VALUE_INT) {
 					produce_error(ERR_ARRAY_LENGTH_OPERATOR_EXPECTS_INT_DIM, nullptr, binary_op);
 					binary_op->checked_type = nyla::type::get_error();
 					return;
 				}
 				nyla::anumber* dimension_number = dynamic_cast<nyla::anumber*>(dimension_expr);
-				if (dimension_number->value_int > lhs_checked_type->array_depths.size()-1) {
+				if (dimension_number->value_int > lhs_checked_type->arr_depth-1) {
 					produce_error(ERR_ARRAY_LENGTH_OPERATOR_INVALID_DIM_INDEX,
 						error_data::make_type_load(binary_op->lhs->checked_type), binary_op);
 					binary_op->checked_type = nyla::type::get_error();
@@ -210,27 +224,28 @@ void analysis::type_check_binary_op(nyla::abinary_op* binary_op) {
 				binary_op->op = TK_ARRAY_LENGTH;
 				binary_op->checked_type = nyla::type::get_ulong();
 			} else {
-
-				if (binary_op->rhs->tag != AST_VARIABLE) {
+				
+				if (binary_op->rhs->tag != AST_IDENTIFIER) {
 					produce_error(ERR_DOT_OP_ON_ARRAY_EXPECTS_LENGTH, nullptr, binary_op);
 					binary_op->checked_type = nyla::type::get_error();
 					return;
 				}
 
-				nyla::avariable* rhs_name = dynamic_cast<nyla::avariable*>(binary_op->rhs);
+				nyla::aidentifier* rhs_name = dynamic_cast<nyla::aidentifier*>(binary_op->rhs);
 				if (rhs_name->name != nyla::name::make("length")) {
 					produce_error(ERR_DOT_OP_ON_ARRAY_EXPECTS_LENGTH, nullptr, binary_op);
 					binary_op->checked_type = nyla::type::get_error();
 					return;
 				}
 
-				if (lhs_checked_type->array_depths.size() > 1) {
+				if (lhs_checked_type->arr_depth > 1) {
 					produce_error(ERR_ARRAY_LENGTH_NO_DIM_INDEX_FOR_MULTIDIM_ARRAY, 
 						error_data::make_type_load(binary_op->lhs->checked_type), binary_op);
 					binary_op->checked_type = nyla::type::get_error();
 					return;
 				}
 
+				// Replacing the rhs operatation with a request for the array's length
 				delete binary_op->rhs;
 				binary_op->rhs = gen_default_value(nyla::type::get_int()); // Generating value 0
 				binary_op->op = TK_ARRAY_LENGTH;
@@ -250,10 +265,6 @@ void analysis::type_check_binary_op(nyla::abinary_op* binary_op) {
 	if (rhs_checked_type->tag == TYPE_ERROR) {
 		binary_op->checked_type = nyla::type::get_error();
 		return;
-	}
-
-	if (*lhs_checked_type == *rhs_checked_type) {
-		binary_op->checked_type = lhs_checked_type;
 	}
 
 	if (binary_op->op == '.') {
@@ -313,6 +324,8 @@ void analysis::type_check_binary_op(nyla::abinary_op* binary_op) {
 					binary_op->checked_type = rhs_checked_type; // Since the rhs is prefered.
 				}
 			}
+		} else {
+			binary_op->checked_type = lhs_checked_type;
 		}
 	} else if (binary_op->op == '=') {
 		// to  = from
@@ -322,9 +335,11 @@ void analysis::type_check_binary_op(nyla::abinary_op* binary_op) {
 				type_mismatch_data::make_type_mismatch(lhs_checked_type, rhs_checked_type),
 				binary_op);
 			binary_op->checked_type = nyla::type::get_error();
+			return;
 		}
 		if (!attempt_assign(binary_op->lhs, binary_op->rhs)) {
 			binary_op->checked_type = nyla::type::get_error();
+			return;
 		}
 		binary_op->checked_type = binary_op->lhs->checked_type;
 	}
@@ -370,28 +385,31 @@ void analysis::type_check_type_cast(nyla::atype_cast* type_cast) {
 	type_check_expression(type_cast->value);
 }
 
-void analysis::type_check_variable(nyla::avariable* variable) {
+void analysis::type_check_identifier(nyla::aidentifier* identifier) {
+	
 	// Since the variable was declared previously we simple look up
 	// it's type.
-	nyla::avariable* declared_variable = m_sym_table.get_declared_variable(m_scope, variable);
-	
+	nyla::avariable* declared_variable = m_sym_table.get_declared_variable(m_scope, identifier);
+
 	if (declared_variable == nullptr) {
 		produce_error(ERR_UNDECLARED_VARIABLE,
-			error_data::make_str_literal_load(variable->name.c_str()),
-			variable);
-		variable->checked_type = nyla::type::get_error();
-		return;
-	}
-	// Making sure the variable was declared before it was used.
-	if (declared_variable->st->spos > variable->st->spos) {
-		produce_error(ERR_USE_BEFORE_DECLARED_VARIABLE,
-			error_data::make_str_literal_load(variable->name.c_str()),
-			variable);
-		variable->checked_type = nyla::type::get_error();
+			error_data::make_str_literal_load(identifier->name.c_str()),
+			identifier);
+		identifier->checked_type = nyla::type::get_error();
 		return;
 	}
 
-	variable->checked_type = declared_variable->checked_type;
+	// Making sure the variable was declared before it was used.
+	if (declared_variable->st->spos > identifier->st->spos) {
+		produce_error(ERR_USE_BEFORE_DECLARED_VARIABLE,
+			error_data::make_str_literal_load(identifier->name.c_str()),
+			identifier);
+		identifier->checked_type = nyla::type::get_error();
+		return;
+	}
+
+	identifier->checked_type = declared_variable->checked_type;
+	identifier->variable = declared_variable;
 }
 
 void nyla::analysis::type_check_for_loop(nyla::afor_loop* for_loop) {
@@ -414,61 +432,82 @@ void nyla::analysis::type_check_for_loop(nyla::afor_loop* for_loop) {
 void analysis::type_check_type(nyla::type* type) {
 	// TODO: if the type is undetermined then it needs to now
 	// be determined here.
-
 	if (type->is_arr()) {
-		for (nyla::aexpr* array_depth_expr : type->array_depths) {
-			// Possible that no number exist between []
-			if (array_depth_expr == nullptr) continue;
-
-			type_check_expression(array_depth_expr);
-			
-			if (!array_depth_expr->is_constexpr) {
-				/*produce_error(ERR_ARRAY_SIZE_EXPECTS_CONSTANT_EXPR,
-					error_data::make_type_load(type),
-					array_depth_expr);*/
-				return;
-			}
-			if (!array_depth_expr->checked_type->is_int()) {
+		// Possible that no number exist between []
+		if (type->dim_size != nullptr) {
+			type_check_expression(type->dim_size);
+			if (!type->dim_size->checked_type->is_int()) {
 				produce_error(ERR_ARRAY_SIZE_EXPECTS_INT,
 					error_data::make_type_load(type),
-					array_depth_expr);
+					type->dim_size);
 				return;
 			}
 		}
+		
+		type_check_type(type->elem_type);
 	}
 }
 
-void analysis::type_check_array(nyla::aarray* arr) {
+void analysis::type_check_array(nyla::aarray* arr, const std::vector<u64>& depths, u32 depth) {
 	if (arr->checked_type == nyla::type::get_error()) {
 		return;
 	}
-
+	
 	for (nyla::aexpr* element : arr->elements) {
-		type_check_expression(element);
-	}
-	std::vector<nyla::aexpr*> processed_array_depths;
-	for (u64 depth : arr->depths) {
-		nyla::anumber* processed_depth =
-			nyla::make_node<nyla::anumber>(AST_VALUE_ULONG, arr->st, arr->st);
-		processed_depth->value_ulong = depth;
-		processed_array_depths.push_back(processed_depth);
+		if (element->tag == AST_ARRAY) {
+			type_check_array(dynamic_cast<nyla::aarray*>(element), depths, depth + 1);
+		} else {
+			type_check_expression(element);
+		}
 	}
 
-	arr->checked_type = nyla::type::get_arr_mixed(processed_array_depths);
+	nyla::anumber* processed_dim_size =
+		nyla::make_node<nyla::anumber>(AST_VALUE_ULONG, arr->st, arr->st);
+	processed_dim_size->value_ulong = depths[depth];
+	processed_dim_size->checked_type = nyla::type::get_ulong();
+
+	nyla::type* fst_arr_type = nyla::type::get_arr(nullptr, processed_dim_size);
+	nyla::type* cur_arr_type = fst_arr_type;
+	for (u32 i = 1; i < depths.size(); i++) {
+		processed_dim_size =
+			nyla::make_node<nyla::anumber>(AST_VALUE_ULONG, arr->st, arr->st);
+		processed_dim_size->value_ulong = depths[i];
+		processed_dim_size->checked_type = nyla::type::get_ulong();
+
+		nyla::type* arr_type = nyla::type::get_arr(nullptr, processed_dim_size);
+		cur_arr_type->elem_type = arr_type;
+		cur_arr_type = arr_type;
+	}
+	cur_arr_type->elem_type = nyla::type::get_mixed();
+
+	arr->checked_type = fst_arr_type;
+	arr->checked_type->calculate_arr_depth();
+
 }
 
-void analysis::type_check_array_access(nyla::aarray_access* array_access) {
-	type_check_variable(array_access->variable);
-	if (array_access->variable->checked_type->tag == TYPE_ERROR) {
-		array_access->checked_type = nyla::type::get_error();
-		return;
+void analysis::type_check_array_access(nyla::aarray_access* array_access, u32 depth) {
+	type_check_expression(array_access->index);
+	array_access->index = make_cast(array_access->index, nyla::type::get_ulong());
+
+	if (array_access->next) {
+		type_check_array_access(dynamic_cast<nyla::aarray_access*>(array_access->next), depth + 1);
+		if (array_access->next->checked_type->tag == TYPE_ERROR) {
+			array_access->checked_type = nyla::type::get_error();
+			return;
+		}
+		array_access->checked_type = array_access->next->checked_type;
+		array_access->ident = array_access->next->ident;
+	} else {
+		type_check_identifier(dynamic_cast<nyla::aidentifier*>(array_access->ident));
+		if (array_access->ident->checked_type->tag == TYPE_ERROR) {
+			array_access->checked_type = nyla::type::get_error();
+			return;
+		}
+		array_access->checked_type = array_access->ident
+			                                     ->checked_type
+			                                     ->get_array_at_depth(depth + 1);
 	}
-	// TODO 
-	array_access->checked_type = array_access->variable->checked_type->get_element_type();
-	for (u32 i = 0; i < array_access->indexes.size(); i++) {
-		type_check_expression(array_access->indexes[i]);
-		array_access->indexes[i] = make_cast(array_access->indexes[i], nyla::type::get_ulong());
-	}
+	
 }
 
 void analysis::flatten_array(nyla::type* assign_type, std::vector<u64> depths,
@@ -493,10 +532,18 @@ void analysis::flatten_array(nyla::type* assign_type, std::vector<u64> depths,
 			out_arr->elements.push_back(gen_default_value(assign_type));
 		}
 	} else {
+		
+		// Filling algorithm
+		// [i][j][k]
+		//	^  ^  k-processed
+		//	|  |
+		//	|  k
+		// i*k
+
 		u64 amount_at_depth = depths[depth];
-		// The lower the depth value the more to fill
-		u64 amount_to_fill = depths[0];
-		for (u32 i = 1; i < depths.size(); i++) {
+
+		u64 amount_to_fill = depths[depths.size() - 1];
+		for (u32 i = depths.size() - 2; i > depth; i--) {
 			amount_to_fill *= depths[i];
 		}
 		for (u64 i = processed; i < amount_at_depth; i++) {
@@ -515,23 +562,31 @@ bool analysis::is_assignable_to(nyla::aexpr* from, nyla::type* to) {
 	if (from->checked_type->tag == TYPE_STRING) {
 		switch (to->tag) {
 		case TYPE_PTR: {
-			if (to->get_element_type()->tag == TYPE_CHAR16) {
-				return to->ptr_depth == 1; // char16* s = "Hello!";
+			if (to->get_ptr_base_type()->tag == TYPE_CHAR16) {
+				return to->ptr_depth == 1;
 			}
-			
+			return false;
+		}
+		case TYPE_ARR: {
+			if (to->get_array_base_type()->tag == TYPE_CHAR16) {
+				return to->arr_depth == 1;
+			}
 			return false;
 		}
 		default:
 			return false;
 		}
 	} else if (from->checked_type->is_arr()) {
-		return to->is_arr();
+		return to->is_arr() || to->is_ptr();
+	} else if (from->checked_type->tag == TYPE_NULL) {
+		return to->is_ptr();
 	} else {
 		return *from->checked_type == *to; // TODO: probably too strict
 	}
 }
 
 bool nyla::analysis::attempt_assign(nyla::aexpr*& lhs, nyla::aexpr*& rhs) {
+
 	nyla::type* lhs_type = lhs->checked_type;
 	nyla::type* rhs_type = rhs->checked_type;
 	if (lhs->checked_type->tag == TYPE_ERROR) return true;
@@ -541,24 +596,71 @@ bool nyla::analysis::attempt_assign(nyla::aexpr*& lhs, nyla::aexpr*& rhs) {
 	// int[][] a = { {1, 2}, {7, 8} }
 
 	if (rhs_type->tag == TYPE_STRING) {
-		// TODO: we should be able to convert the string type
-		// to various types such as char16*, char8*, ect..
-		rhs->checked_type = lhs->checked_type;
-	} else if (rhs_type->is_arr()) {
+		nyla::astring* str = dynamic_cast<nyla::astring*>(rhs);
+		switch (lhs_type->tag) {
+		case TYPE_ARR: {
+
+			nyla::type* arr_type = lhs->checked_type;
+			while (arr_type->tag == TYPE_ARR) {
+				if (arr_type->dim_size != nullptr) {
+					produce_error(ERR_ARRAY_SIZE_SHOULD_BE_IMPLICIT, nullptr, lhs);
+					return false;
+				}
+				arr_type = arr_type->elem_type;
+			}
+
+			if (lhs_type->get_array_base_type()->tag == TYPE_CHAR16) {
+
+				nyla::aarray* str_as_arr =
+					make_node<nyla::aarray>(AST_ARRAY, rhs->st, rhs->et);
+				str_as_arr->depths.push_back(str->lit.length());
+				for (c8& ch : str->lit) {
+					nyla::anumber* expr_ch =
+						make_node<nyla::anumber>(AST_VALUE_SHORT, rhs->st, rhs->et);
+					expr_ch->checked_type = nyla::type::get_char16();
+					expr_ch->value_int = ch & 0xFF;
+					str_as_arr->elements.push_back(expr_ch);
+				}
+
+				nyla::anumber* dim_size = make_node<nyla::anumber>(AST_VALUE_ULONG,
+					lhs->st, lhs->et);
+				dim_size->value_ulong = str->lit.length();
+				dim_size->checked_type = nyla::type::get_ulong();
+				str_as_arr->checked_type = nyla::type::get_arr(
+					nyla::type::get_char16(), dim_size);
+				str_as_arr->checked_type->calculate_arr_depth();
+
+				delete rhs;
+				rhs = str_as_arr;
+
+				lhs->checked_type = rhs->checked_type;
+				get_variable(lhs)->checked_type = lhs->checked_type;
+			}
+			break;
+		}
+		case TYPE_PTR: {
+			// TODO
+			break;
+		}
+		}
+
+	} else if (rhs->tag == AST_ARRAY) {
 		
-		if (rhs_type->array_depths.size() != lhs_type->array_depths.size()) {
+		if (rhs_type->arr_depth != lhs_type->arr_depth) {
 			produce_error(ERR_DIMENSIONS_OF_ARRAYS_MISMATCH,
 				type_mismatch_data::make_type_mismatch(lhs_type, rhs_type), rhs);
 			return false;
 		}
 
-		for (nyla::aexpr* array_depth : lhs->checked_type->array_depths) {
-			if (array_depth != nullptr) {
+		nyla::type* arr_type = lhs->checked_type;
+		while (arr_type->tag == TYPE_ARR) {
+			if (arr_type->dim_size != nullptr) {
 				produce_error(ERR_ARRAY_SIZE_SHOULD_BE_IMPLICIT, nullptr, lhs);
 				return false;
 			}
+			arr_type = arr_type->elem_type;
 		}
-		
+
 		// Here I would flatten the array and assign default
 		// values to fill empty space in the array
 		nyla::aarray* arr = dynamic_cast<nyla::aarray*>(rhs);
@@ -568,39 +670,52 @@ bool nyla::analysis::attempt_assign(nyla::aexpr*& lhs, nyla::aexpr*& rhs) {
 		for (u32 i = 1; i < arr->depths.size(); i++) {
 			flattened_size *= arr->depths[i];
 		}
-		std::vector<nyla::aexpr*> array_depths;
-		array_depths.reserve(arr->depths.size());
-		for (u32 i = 0; i < arr->depths.size(); i++) {
-			nyla::anumber* depth_expr = make_node<nyla::anumber>(AST_VALUE_ULONG, arr->st, arr->st);
-			depth_expr->value_ulong = arr->depths[i];
-			depth_expr->checked_type = nyla::type::get_ulong();
-			array_depths.push_back(depth_expr);
-		}
 
 		flattened_arr->elements.reserve(flattened_size);
-		flatten_array(lhs->checked_type->get_element_type(), arr->depths, arr, flattened_arr);
-		flattened_arr->checked_type = lhs->checked_type
-			                             ->get_element_type()
-			                             ->as_arr(array_depths);
+		flatten_array(lhs->checked_type->get_array_base_type(), arr->depths, arr, flattened_arr);
+		flattened_arr->checked_type = rhs->checked_type;
+		flattened_arr->checked_type->set_array_base_type(lhs->checked_type->get_array_base_type());
 
-		delete arr; // Deleting the rhs and replacing it with a flattened version of the
+		delete rhs; // Deleting the rhs and replacing it with a flattened version of the
 		            // array
 		rhs = flattened_arr;
-		
 		lhs->checked_type = rhs->checked_type;
+		get_variable(lhs)->checked_type = lhs->checked_type;
 
 		// Making sure the elements are compatible
 		for (nyla::aexpr* element : flattened_arr->elements) {
-			if (!is_assignable_to(element, lhs_type->get_element_type())) {
+			if (!is_assignable_to(element, lhs_type->get_array_base_type())) {
 				produce_error(ERR_ELEMENT_OF_ARRAY_NOT_COMPATIBLE_WITH_ARRAY,
-					type_mismatch_data::make_type_mismatch(lhs_type->get_element_type(), element->checked_type), element);
+					type_mismatch_data::make_type_mismatch(lhs_type->get_array_base_type(), element->checked_type), element);
 				return false;
 			}
 		}
 
+	} else if (rhs_type->tag == TYPE_NULL) {
+		// Converting RHS into numberic value of zero for the pointer
+		delete rhs;
+		rhs = make_cast(gen_default_value(nyla::type::get_int()), lhs->checked_type);
+	} else if (rhs_type->is_arr()) {
+		if (lhs_type->is_ptr()) {
+			// T[] b;
+			// T* ptr a = b;
+			rhs->checked_type = lhs->checked_type;
+		} else {
+			nyla::avariable* variable     = get_variable(lhs);
+			variable->arr_alloc_reference = get_variable(rhs);
+			lhs->checked_type = rhs->checked_type;
+		}
 	} else {
 		lhs->checked_type = rhs->checked_type;
 	}
+}
+
+bool analysis::attempt_pass_arg(nyla::aexpr*& argument, nyla::type* param_type) {
+	if (argument->tag == AST_VALUE_NULL) { // null to zero value
+		delete argument;
+		argument = make_cast(gen_default_value(nyla::type::get_int()), param_type);
+	}
+	return true;
 }
 
 bool analysis::only_works_on_ints(u32 op) {
@@ -717,5 +832,18 @@ nyla::aexpr* analysis::gen_default_value(nyla::type* type) {
 		assert(!"Failed to implement default value for type");
 		break;
 	}
+	return nullptr;
+}
+
+nyla::avariable* analysis::get_variable(nyla::aexpr* expr) {
+	switch (expr->tag) {
+	case AST_IDENTIFIER:
+		return dynamic_cast<nyla::aidentifier*>(expr)->variable;
+	case AST_VARIABLE:
+		return dynamic_cast<nyla::avariable*>(expr);
+	case AST_ARRAY_ACCESS:
+		return dynamic_cast<nyla::aarray_access*>(expr)->ident->variable;
+	}
+	assert(!"Should only be called when trying to get an already allocated lvalue");
 	return nullptr;
 }

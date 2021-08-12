@@ -13,8 +13,8 @@ int main() {
 	int STD_OUTPUT_HANDLE = -11;
 	int* handle = GetStdHandle(STD_OUTPUT_HANDLE);
 
-	char16* myString = "Wow! How did we get here!\n";
-	long* charsWritten = cast(long*) 0;
-	WriteConsoleW(handle, myString, cast(long) 26, charsWritten, cast(int*) 0);
+	char16[] myString = "Wow! How did we get here!\n";
+	long* charsWritten = null;
+	WriteConsoleW(handle, cast(char16*) myString, myString.length, charsWritten, null);
 	return 0;
 }

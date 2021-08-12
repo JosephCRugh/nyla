@@ -34,7 +34,7 @@ namespace nyla {
 
 		nyla::type* parse_type();
 
-		nyla::name parse_identifier();
+		nyla::aidentifier* parse_identifier();
 
 		/// <summary>
 		/// Parses a type followed by a variable name.
@@ -82,13 +82,13 @@ namespace nyla {
 
 		nyla::aexpr* parse_expression(nyla::aexpr* lhs);
 
-		nyla::afunction_call* parse_function_call(nyla::name& name, nyla::token* start_token);
+		nyla::afunction_call* parse_function_call(nyla::aidentifier* name, nyla::token* start_token);
 
 		nyla::aarray* parse_array();
 
 		nyla::abinary_op* parse_dot_op(nyla::aexpr* lhs);
 
-		nyla::aarray_access* parse_array_access(nyla::name& name, nyla::token* start_token);
+		nyla::aarray_access* parse_array_access(nyla::aidentifier* name, nyla::token* start_token);
 
 		std::vector<nyla::token*> get_processed_tokens() { return m_processed_tokens; }
 

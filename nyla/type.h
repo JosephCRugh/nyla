@@ -34,26 +34,29 @@ namespace nyla {
 		TYPE_PTR,
 		TYPE_ARR,
 
+		TYPE_NULL
+
 	};
 
 	struct aexpr;
 
 	struct type {
-		type_tag tag;
-		type_tag elem_tag;
-		
-		u32                       ptr_depth = 0;
-		std::vector<nyla::aexpr*> array_depths;
+		type_tag     tag;
+		nyla::type*  elem_type;
+		// Arrays have sizes for their dimensions
+		nyla::aexpr* dim_size;
+		u32          arr_depth = 0; // how many [] subscripts exist
+		u32          ptr_depth = 0; // how many * subscripts exist
 
 		nyla::token* st = nullptr;
 		nyla::token* et = nullptr;
 
 		type() {}
 		type(type_tag _tag) : tag(_tag) {}
-		type(type_tag _tag, u32 _ptr_depth)
-			: tag(_tag), ptr_depth(_ptr_depth) {}
-		type(type_tag _tag, type_tag _elem_tag, u32 _ptr_depth)
-			: tag(_tag), elem_tag(_elem_tag), ptr_depth(_ptr_depth) {}
+		type(type_tag _tag, nyla::type* _elem_type)
+			: tag(_tag), elem_type(_elem_type) {}
+		type(type_tag _tag, nyla::type* _elem_type, nyla::aexpr* _dim_size)
+			: tag(_tag), elem_type(_elem_type), dim_size(_dim_size) {}
 
 		static nyla::type* get_byte();
 		static nyla::type* get_short();
@@ -69,35 +72,26 @@ namespace nyla {
 		static nyla::type* get_void();
 		static nyla::type* get_string();
 		static nyla::type* get_char16();
+		static nyla::type* get_mixed();
 		static nyla::type* get_error();
+		static nyla::type* get_null();
 
-		static nyla::type* get_ptr_byte(u32 depth);
-		static nyla::type* get_ptr_short(u32 depth);
-		static nyla::type* get_ptr_int(u32 depth);
-		static nyla::type* get_ptr_long(u32 depth);
-		static nyla::type* get_ptr_float(u32 depth);
-		static nyla::type* get_ptr_double(u32 depth);
-		static nyla::type* get_ptr_bool(u32 depth);
-		static nyla::type* get_ptr_char16(u32 depth);
+		static nyla::type* get_arr(nyla::type* elem_type, nyla::aexpr* dim_size);
 
-		static nyla::type* get_arr_byte(std::vector<nyla::aexpr*>& array_depths);
-		static nyla::type* get_arr_short(std::vector<nyla::aexpr*>& array_depths);
-		static nyla::type* get_arr_int(std::vector<nyla::aexpr*>& array_depths);
-		static nyla::type* get_arr_long(std::vector<nyla::aexpr*>& array_depths);
-		static nyla::type* get_arr_float(std::vector<nyla::aexpr*>& array_depths);
-		static nyla::type* get_arr_double(std::vector<nyla::aexpr*>& array_depths);
-		static nyla::type* get_arr_bool(std::vector<nyla::aexpr*>& array_depths);
-		static nyla::type* get_arr_char16(std::vector<nyla::aexpr*>& array_depths);
-		static nyla::type* get_arr_mixed(std::vector<nyla::aexpr*>& array_depths);
+		static nyla::type* get_ptr(nyla::type* elem_type);
 
-		static nyla::type* make_arr(type_tag tag, std::vector<nyla::aexpr*>& array_depths);
+		void calculate_arr_depth();
 
-		nyla::type* as_ptr(u32 depth);
+		void calculate_ptr_depth();
 
-		nyla::type* as_arr(std::vector<nyla::aexpr*>& array_depths);
+		nyla::type* get_array_at_depth(u32 req_depth, u32 depth = 0);
 
-		nyla::type* get_element_type();
+		nyla::type* get_array_base_type();
+
+		nyla::type* get_ptr_base_type();
 		
+		void set_array_base_type(nyla::type* type);
+
 		friend std::ostream& operator<<(std::ostream& os, const nyla::type& type);
 
 		void print_elem(std::ostream& os, type_tag elem_tag) const;
@@ -138,6 +132,8 @@ namespace nyla {
 		extern nyla::type* string_type;
 		extern nyla::type* char16_type;
 		extern nyla::type* error_type;
+		extern nyla::type* mixed_type;
+		extern nyla::type* null_type;
 	}
 
 }
