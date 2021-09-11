@@ -68,6 +68,7 @@ namespace nyla {
 		u32               field_index; // If the variable is part of a module
 									   // it has a module field index
 		bool is_field = false; // Field of module
+		bool is_global = false; // variable marked with static
 		u32 position_declared_at; // Position in character buffer that the variable
 		                          // was declared at. Used to make sure assignments occure
 		                          // after declaration and not before.

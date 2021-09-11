@@ -328,6 +328,10 @@ void nyla::log::err(error_tag tag, const error_payload& payload,
 		std::cerr << "Array access on invalid type";
 		break;
 	}
+	case ERR_CIRCULAR_FIELDS: {
+		std::cerr << "Circular fields found. A module has a field which references itself";
+		break;
+	}
 	}
 
 	std::cerr << '\n';

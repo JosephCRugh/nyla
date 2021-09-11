@@ -31,6 +31,10 @@ std::ostream& operator<<(std::ostream& os, const ll_type_printer& ll_printer) {
 }
 
 
+nyla::llvm_generator::~llvm_generator() {
+	delete m_llvm_builder;
+}
+
 nyla::llvm_generator::llvm_generator(nyla::compiler& compiler, llvm::Module* llvm_module,
 	                                 nyla::afile_unit* file_unit, bool print)
 	: m_compiler(compiler), m_llvm_module(llvm_module), m_print(print), m_file_unit(file_unit) {
@@ -46,91 +50,24 @@ void nyla::llvm_generator::gen_file_unit() {
 void nyla::llvm_generator::gen_declarations() {
 	for (nyla::amodule* nmodule : m_file_unit->modules) {
 
+		// Creating the type of the struct for the module
 		std::vector<llvm::Type*> ll_struct_types;
+		llvm::StructType* ll_struct_type = llvm::StructType::create(*llvm_context);
+		nmodule->sym_module->ll_struct_type = ll_struct_type;
+
 		for (nyla::avariable_decl* field : nmodule->fields) {
-			if (field->sym_variable->mods & nyla::modifier::MOD_STATIC) {
-				// If it is static then it becomes a global variable
-				nyla::sym_variable* sym_variable = field->sym_variable;
-
-				std::string global_name = "g_";
-				global_name += get_word(sym_variable->name_key).c_str();
-				global_name += ".";
-				global_name += std::to_string(m_compiler.get_num_global_variable_count());
-
-				m_llvm_module->getOrInsertGlobal(
-					global_name.c_str(), gen_type(field->type));
-
-				llvm::GlobalVariable* ll_gvar =
-					m_llvm_module->getNamedGlobal(global_name);
-
-				switch (field->type->tag) {
-				case TYPE_ARR: {
-					// Has to be initialized to something for it not to be external
-					ll_gvar->setInitializer(llvm::ConstantPointerNull::get(
-						llvm::cast<llvm::PointerType>(gen_type(field->type))));
-
-					// Even if there is no assignment there still may be
-					// array size allocation
-					m_compiler.add_global_initialize_expr(field);
-					break;
-				}
-				case TYPE_MODULE: {
-					// TODO: needs completion
-					sym_module* sym_module = field->type->sym_module;
-
-					
-					std::vector<llvm::Constant*> parameters;
-					for (nyla::avariable_decl* field : sym_module->fields) {
-						// TODO: come back to
-						llvm::Constant* constant_field = gen_default_value(field->type);
-						//llvm::Constant* value = get_ll_int64(50);
-						parameters.push_back(constant_field);
-					}
-
-					llvm::StructType* st = llvm::cast<llvm::StructType>(gen_type(field->type));
-
-					llvm::Constant* constantStruct =
-						llvm::ConstantStruct::get(st, parameters);
-
-					ll_gvar->setInitializer(constantStruct);
-					///TODOm_compiler.add_global_initialize_expr(field);
-					break;
-				}
-				default: {
-					if (field->comptime) {
-						ll_gvar->setInitializer(
-							llvm::cast<llvm::Constant>(
-								gen_expr_rvalue(
-									dynamic_cast<nyla::abinary_op*>(field->assignment)->rhs)
-								));
-					} else {
-						ll_gvar->setInitializer(gen_default_value(field->type));
-						m_compiler.add_global_initialize_expr(field);
-					}
-					break;
-				}
-				}
-
-				sym_variable->ll_alloc = ll_gvar;
-
-				if (m_print) {
-					ll_gvar->print(llvm::outs());
-					std::cout << '\n';
-				}
-
-			} else {
-				// Field is part of the structure
-				ll_struct_types.push_back(gen_type(field->type));
-			}
+			ll_struct_types.push_back(gen_type(field->type));
 		}
+
 		if (ll_struct_types.empty()) {
 			ll_struct_types.push_back(llvm::Type::getInt8Ty(*llvm_context));
 		}
-		llvm::StructType* ll_struct_type = llvm::StructType::create(ll_struct_types);
+		ll_struct_type->setBody(ll_struct_types);
+
 		if (m_print) {
 			ll_struct_type->setName(get_word(nmodule->name_key).c_str());
 		}
-		nmodule->sym_module->ll_struct_type = ll_struct_type;
+		
 
 		if (m_print) {
 			ll_struct_type->print(llvm::outs());
@@ -148,25 +85,36 @@ void nyla::llvm_generator::gen_declarations() {
 
 void nyla::llvm_generator::gen_global_initializers(sym_function* sym_main_function,
 	                                               const std::vector<nyla::avariable_decl*>& initializer_expressions) {
+	m_initializing_globals = true;
 	llvm::BasicBlock* ll_main_bb = &sym_main_function->ll_function->getEntryBlock();
 	m_llvm_builder->SetInsertPoint(&ll_main_bb->front());
 	for (nyla::avariable_decl* global_initializer : initializer_expressions) {
-		switch (global_initializer->type->tag) {
-		case TYPE_ARR:
-			if (global_initializer->assignment) {
-				gen_expression(global_initializer->assignment);
-			} else {
-				gen_default_value(global_initializer->sym_variable, global_initializer->type, global_initializer->default_initialize);
-			}
-			break;
-		default:
-			gen_expression(global_initializer->assignment);
-			break;
-		}
+		// Need to GEP into parts of the structure!
+
+		gen_variable_decl(global_initializer, false);
 	}
+	m_initializing_globals = false;
 }
 
 void nyla::llvm_generator::gen_module(nyla::amodule* nmodule) {
+	// Initializing what part of global variables that can
+	// be initialized then passing the data off to the global
+	// initializer expressions if they need further initialization
+	
+	// For any variable either shove it into global
+	// memory somewhere or add it to the global initializer
+	// list of expressions, and for some variables of some
+	// types it must do both
+
+	for (nyla::avariable_decl* global : nmodule->globals) {
+		global->sym_variable->ll_alloc = gen_global_variable(global);
+
+		if (m_print) {
+			global->sym_variable->ll_alloc->print(llvm::outs());
+			std::cout << '\n';
+		}
+	}
+
 	for (nyla::afunction* constructor : nmodule->constructors) {
 		gen_function_body(constructor);
 	}
@@ -197,8 +145,7 @@ void nyla::llvm_generator::gen_function_declaration(nyla::afunction* function) {
 		llvm::FunctionType::get(ll_return_type, ll_parameter_types, is_var_args);
 
 	std::string function_name;
-	// TODO: replace with function count mangling
-
+	
 	if (function->is_constructor) {
 		function_name = "_C";
 		function_name += get_word(function->name_key).c_str();
@@ -270,6 +217,116 @@ void nyla::llvm_generator::gen_function_declaration(nyla::afunction* function) {
 	function->sym_function->ll_function = ll_function;
 }
 
+llvm::Value* nyla::llvm_generator::gen_global_variable(nyla::avariable_decl* global) {
+	// TODO: im pretty sure this shit is broken AF for default initialization
+
+	// If it is static then it becomes a global variable
+	nyla::sym_variable* sym_variable = global->sym_variable;
+
+	std::string global_name = "g_";
+	global_name += get_word(sym_variable->name_key).c_str();
+	global_name += ".";
+	global_name += std::to_string(m_compiler.get_num_global_variable_count());
+
+	m_llvm_module->getOrInsertGlobal(
+		global_name.c_str(), gen_type(global->type));
+
+	llvm::GlobalVariable* ll_gvar =
+		m_llvm_module->getNamedGlobal(global_name);
+
+	nyla::type* type = global->type;
+	switch (type->tag) {
+	case TYPE_ARR: {
+		// Has to be initialized to something for it not to be external
+		ll_gvar->setInitializer(llvm::ConstantPointerNull::get(
+			llvm::cast<llvm::PointerType>(gen_type(type))));
+		
+		// Even if there is no assignment there still may be
+		// array size allocation
+		m_compiler.add_global_initialize_expr(global);
+		break;
+	}
+	case TYPE_MODULE: {
+		
+		ll_gvar->setInitializer(gen_global_module(global));
+		// Some fields may not be able to be fully generated during it's
+		// declaration so must be handled later
+		m_compiler.add_global_initialize_expr(global);
+		break;
+	}
+	default: {
+		if (!global->assignment) {
+			ll_gvar->setInitializer(gen_default_value(type));
+		} else {
+			if (global->assignment->literal_constant) {
+					ll_gvar->setInitializer(llvm::cast<llvm::Constant>(
+						gen_expr_rvalue(
+							dynamic_cast<nyla::abinary_op*>(global->assignment)->rhs)
+					));
+			} else {
+				ll_gvar->setInitializer(gen_default_value(type));
+				m_compiler.add_global_initialize_expr(global);
+			}
+		}
+		break;
+	}
+	}
+
+	return ll_gvar;
+}
+
+llvm::Constant* nyla::llvm_generator::gen_global_module(nyla::avariable_decl* static_module) {
+	nyla::type* type = static_module->type;
+
+	sym_module* sym_module = type->sym_module;
+
+	std::vector<llvm::Constant*> parameters;
+	bool has_member_fields = false;
+	for (nyla::avariable_decl* field : sym_module->fields) {	
+		has_member_fields = true;
+		switch (field->type->tag) {
+		case TYPE_MODULE: {
+			llvm::Constant* constantStruct = gen_global_module(field);
+			parameters.push_back(constantStruct);
+			break;
+		}
+		case TYPE_ARR: {
+			// Has to be initialized to something to fill the space in the structure
+			parameters.push_back(llvm::ConstantPointerNull::get(
+				llvm::cast<llvm::PointerType>(gen_type(field->type))));
+			break;
+		}
+		default: {
+			if (!field->assignment) {
+				parameters.push_back(gen_default_value(field->type));
+			} else {
+				if (field->assignment->literal_constant) {
+					parameters.push_back(
+						llvm::cast<llvm::Constant>(
+							gen_expr_rvalue(
+								dynamic_cast<nyla::abinary_op*>(field->assignment)->rhs)
+							));
+				} else {
+					// Have to come back and fill in later
+					parameters.push_back(gen_default_value(field->type));
+				}
+			}
+			break;
+		}
+		}
+	}
+	if (!has_member_fields) {
+		parameters.push_back(get_ll_int8(0));
+	}
+
+	llvm::StructType* st = llvm::cast<llvm::StructType>(gen_type(type));
+
+	llvm::Constant* constantStruct =
+		llvm::ConstantStruct::get(st, parameters);
+
+	return constantStruct;
+}
+
 void nyla::llvm_generator::gen_function_body(nyla::afunction* function) {
 	m_function = function;
 	llvm::Function* ll_function = function->sym_function->ll_function;
@@ -295,7 +352,7 @@ void nyla::llvm_generator::gen_function_body(nyla::afunction* function) {
 llvm::Value* nyla::llvm_generator::gen_expression(nyla::aexpr* expr) {
 	switch (expr->tag) {
 	case AST_VARIABLE_DECL:
-		return gen_variable_decl(dynamic_cast<nyla::avariable_decl*>(expr));
+		return gen_variable_decl(dynamic_cast<nyla::avariable_decl*>(expr), true);
 	case AST_RETURN:
 		return gen_return(dynamic_cast<nyla::areturn*>(expr));
 	case AST_BINARY_OP:
@@ -334,8 +391,10 @@ llvm::Value* nyla::llvm_generator::gen_expression(nyla::aexpr* expr) {
 	}
 	case AST_TYPE_CAST:
 		return gen_type_cast(dynamic_cast<nyla::atype_cast*>(expr));
-	case AST_ARRAY_ACCESS:
-		return gen_array_access(dynamic_cast<nyla::aarray_access*>(expr));
+	case AST_ARRAY_ACCESS: {
+		nyla::aarray_access* array_access = dynamic_cast<nyla::aarray_access*>(expr);
+		return gen_array_access(array_access->ident->sym_variable->ll_alloc, array_access);
+	}
 	case AST_FOR_LOOP:
 		return gen_for_loop(dynamic_cast<nyla::afor_loop*>(expr));
 	case AST_WHILE_LOOP:
@@ -383,9 +442,13 @@ llvm::Value* nyla::llvm_generator::gen_expr_rvalue(nyla::aexpr* expr) {
 	return value;
 }
 
-llvm::Value* nyla::llvm_generator::gen_variable_decl(nyla::avariable_decl* variable_decl) {
-	llvm::Value* ll_alloca = gen_allocation(variable_decl->sym_variable);
+llvm::Value* nyla::llvm_generator::gen_variable_decl(nyla::avariable_decl* variable_decl, bool allocate_decl) {
+	if (allocate_decl) {
+		gen_allocation(variable_decl->sym_variable);
+	}
+	
 	sym_variable* sym_variable = variable_decl->sym_variable;
+	llvm::Value* ll_alloca = sym_variable->ll_alloc;
 	if (variable_decl->assignment != nullptr) {
 		gen_expression(variable_decl->assignment);
 	} else {
@@ -700,7 +763,9 @@ llvm::Value* nyla::llvm_generator::gen_array(nyla::aarray* arr) {
 	llvm::Value* arr_alloca = gen_array_alloca(arr->type->element_type, array_size);
 	llvm::Value* ll_arr_ptr = get_arr_ptr(arr->type->element_type, arr_alloca);
 	
-	if (arr->comptime && !arr->type->element_type->is_arr()) {
+	// TODO: is comptime_compat here even correct? I would think that it should be
+	// that every element is constant_literal
+	if (arr->comptime_compat && !arr->type->element_type->is_arr()) {
 		// Constant array so creating global memory and memcpy'ing
 
 		std::vector<llvm::Constant*> ll_element_values;
@@ -820,12 +885,6 @@ void nyla::llvm_generator::gen_global_const_array(nyla::type* element_type,
 
 	llvm::GlobalVariable* ll_gvar =
 		m_llvm_module->getNamedGlobal(global_name);
-	/*std::vector<llvm::Constant*> ll_element_values;
-
-	for (u32 index = 0; index < array_size; index++) {
-		ll_element_values.push_back(
-			llvm::cast<llvm::Constant>(gen_expr_rvalue(arr->elements[index])));
-	}*/
 
 	ll_gvar->setInitializer(
 		llvm::ConstantArray::get(ll_array_type, ll_element_values));
@@ -843,13 +902,12 @@ void nyla::llvm_generator::gen_global_const_array(nyla::type* element_type,
 	);
 }
 
-llvm::Value* nyla::llvm_generator::gen_array_access(nyla::aarray_access* array_access) {
+llvm::Value* nyla::llvm_generator::gen_array_access(llvm::Value* ll_location, nyla::aarray_access* array_access) {
 	
 	sym_variable* sym_variable = array_access->ident->sym_variable;
 	nyla::type* arr_type = sym_variable->type;
 	
-	
-	llvm::Value* ll_arr_alloca = m_llvm_builder->CreateLoad(sym_variable->ll_alloc);
+	llvm::Value* ll_arr_alloca = m_llvm_builder->CreateLoad(ll_location);
 	llvm::Value* ll_arr_ptr = nullptr;
 	if (arr_type->is_arr()) {
 		ll_arr_ptr = get_arr_ptr(arr_type->element_type, ll_arr_alloca);
@@ -940,13 +998,38 @@ llvm::Value* nyla::llvm_generator::gen_var_object(llvm::Value* ptr_to_struct, ny
 	// Initializing the values in the data structure
 	m_initializing_module = true;
 	for (nyla::avariable_decl* field : var_object->sym_module->fields) {
-		u32 field_index = field->sym_variable->field_index;
+		
+		// When initialzing globals not all the data has to be set.
+		// Only that data that was not able to be set by the global
+		// initialization has to be set
+		bool initialize = true;
+		if (m_initializing_globals) {
+			switch (field->type->tag) {
+			case TYPE_ARR:  break; // Always need to initialize array
+			case TYPE_MODULE:
+				// GEP instructions seem to be discarded by LLVM anyway if they are
+				// not used so just go ahead and attempt allocation anyway
+				break;
+			default: {
+				if (field->assignment) {
+					if (field->assignment->literal_constant) {
+						initialize = false; // Already initialized
+					}
+				}
+				break;
+			}
+			}
+		}
 
-		field->sym_variable->ll_alloc = m_llvm_builder->CreateStructGEP(ptr_to_struct, field_index);
-		if (field->assignment) {
-			gen_expression(field->assignment);
-		} else {
-			gen_default_value(field->sym_variable, field->type, field->default_initialize);
+		if (initialize) {
+			u32 field_index = field->sym_variable->field_index;
+
+			field->sym_variable->ll_alloc = m_llvm_builder->CreateStructGEP(ptr_to_struct, field_index);
+			if (field->assignment) {
+				gen_expression(field->assignment);
+			} else {
+				gen_default_value(field->sym_variable, field->type, field->default_initialize);
+			}
 		}
 	}
 	m_initializing_module = false;
@@ -961,7 +1044,7 @@ llvm::Value* nyla::llvm_generator::gen_for_loop(nyla::afor_loop* for_loop) {
 	
 	// Generating declarations before entering the loop
 	for (nyla::avariable_decl* var_decl : for_loop->declarations) {
-		gen_variable_decl(var_decl);
+		gen_variable_decl(var_decl, true);
 	}
 
 	return gen_loop(dynamic_cast<nyla::aloop_expr*>(for_loop));
@@ -1075,10 +1158,14 @@ llvm::Value* nyla::llvm_generator::gen_dot_op(nyla::adot_op* dot_op) {
 			nyla::aarray_access* array_access = dynamic_cast<nyla::aarray_access*>(factor);
 
 			if (!ll_location) {
-				// TODO: This should be taking a location
-				ll_location = gen_array_access(array_access);
+				ll_location = gen_array_access(array_access->ident->sym_variable->ll_alloc, array_access);
 			} else {
-				assert(!"Not implemented yet");
+				// Must be a member of a struct
+				ll_location = m_llvm_builder->CreateStructGEP(
+					ll_location,
+					array_access->ident->sym_variable->field_index
+				);
+				ll_location = gen_array_access(ll_location, array_access);
 			}
 
 			break;

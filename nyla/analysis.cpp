@@ -14,21 +14,44 @@ nyla::analysis::analysis(nyla::compiler& compiler, nyla::log& log,
 
 void nyla::analysis::check_file_unit() {
 	m_sym_table->m_started_analysis = true;
+	m_file_unit->literal_constant = false;
 	for (nyla::amodule* nmodule : m_file_unit->modules) {
 		check_module(nmodule);
 	}
 }
 
 void nyla::analysis::check_module(nyla::amodule* nmodule) {
+	nmodule->literal_constant = false;
 	m_sym_module = nmodule->sym_module;
 	m_sym_scope  = nmodule->sym_scope;
 	for (nyla::avariable_decl* field : nmodule->fields) {
 		check_expression(field);
+		if (field->type->is_module()) {
+			check_circular_fields(field, field->type->sym_module, nmodule->sym_module->unique_module_id);
+		}
+	}
+	for (nyla::avariable_decl* global : nmodule->globals) {
+		check_expression(global);
 	}
 	for (nyla::afunction* function : nmodule->functions) {
 		check_function(function);
 	}
 	m_sym_scope = m_sym_scope->parent;
+}
+
+bool nyla::analysis::check_circular_fields(nyla::avariable_decl* original_field, sym_module* sym_module, u32 unique_module_key) {
+	for (nyla::avariable_decl* field : sym_module->fields) {
+		if (field->type->is_module()) {
+			if (field->type->unique_module_key == unique_module_key) {
+				m_log.err(ERR_CIRCULAR_FIELDS, original_field);
+				return true;
+			}
+			if (check_circular_fields(original_field, field->type->sym_module, unique_module_key)) {
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 void nyla::analysis::check_expression(nyla::aexpr* expr) {
@@ -113,10 +136,12 @@ void nyla::analysis::check_expression(nyla::aexpr* expr) {
 }
 
 void nyla::analysis::check_function(nyla::afunction* function) {
+	function->literal_constant = function->sym_function->mods & MOD_COMPTIME;
+
 	if (function->is_external()) return;
 	m_function = function;
 	m_sym_scope = function->sym_scope;
-	check_scope(function->stmts, function->comptime);
+	check_scope(function->stmts, function->comptime_compat);
 	
 	if (!m_sym_scope->found_return) {
 		if (function->return_type == nyla::types::type_void) {
@@ -127,10 +152,18 @@ void nyla::analysis::check_function(nyla::afunction* function) {
 			m_log.err(ERR_FUNCTION_EXPECTS_RETURN, function);
 		}
 	}
+
+	if (!function->comptime_compat && function->sym_function->mods & MOD_COMPTIME) {
+		// TODO: Produce an error since the function cannot be computed
+		// at compile time
+	}
+
 	m_sym_scope = m_sym_scope->parent;
 }
 
 void nyla::analysis::check_variable_decl(nyla::avariable_decl* variable_decl) {
+	variable_decl->literal_constant = variable_decl->sym_variable->mods & MOD_COMPTIME;
+
 	nyla::type* type = variable_decl->type;
 	nyla::type* underlying_type = type;
 	if (type->is_arr() || type->is_ptr()) {
@@ -139,8 +172,8 @@ void nyla::analysis::check_variable_decl(nyla::avariable_decl* variable_decl) {
 
 	if (variable_decl->assignment != nullptr) {
 		check_expression(variable_decl->assignment);
-		if (!variable_decl->assignment->comptime) {
-			variable_decl->comptime = false;
+		if (!variable_decl->assignment->comptime_compat) {
+			variable_decl->comptime_compat = false;
 		}
 	}
 
@@ -193,17 +226,38 @@ void nyla::analysis::check_variable_decl(nyla::avariable_decl* variable_decl) {
 			}
 		}
 	}
+
+	// In case of assignments when the identifier of the declaration
+	// was checked it set the literal_constant of the lhs/eq_op to
+	// be false. Reverting this so that it can fold the assignment
+	if (variable_decl->assignment) {
+		nyla::abinary_op* eq_op = dynamic_cast<nyla::abinary_op*>(variable_decl->assignment);
+		// lhs should always be a literal constant since it is just the identifier of the
+		// declaration
+		if (eq_op->rhs->literal_constant) {
+			eq_op->literal_constant = true;
+		}
+	}
+
+
+
+	if (!variable_decl->comptime_compat && variable_decl->sym_variable->mods & MOD_COMPTIME) {
+		// TODO: produce an error that the variable is not able to be computed
+		// at compile time
+	}
 }
 
 void nyla::analysis::check_return(nyla::areturn* ret) {
+	ret->literal_constant = false;
+
 	m_sym_scope->found_return = true;
 	if (ret->value) {
 		check_expression(ret->value);
 		if (ret->value->type == nyla::types::type_error) {
 			return;
 		}
-		if (!ret->value->comptime) {
-			ret->comptime = false;
+		if (!ret->value->comptime_compat) {
+			ret->comptime_compat = false;
 		}
 		if (is_assignable_to(m_function->return_type, ret->value->type)) {
 			attempt_assignment(m_function->return_type, ret->value);
@@ -254,8 +308,12 @@ void nyla::analysis::check_binary_op(nyla::abinary_op* binary_op) {
 		return;
 	}
 
-	if (!binary_op->lhs->comptime || !binary_op->rhs->comptime) {
-		binary_op->comptime = false;
+	if (!binary_op->lhs->comptime_compat || !binary_op->rhs->comptime_compat) {
+		binary_op->comptime_compat = false;
+	}
+
+	if (!binary_op->lhs->literal_constant || !binary_op->rhs->literal_constant) {
+		binary_op->literal_constant = false;
 	}
 
 	switch (binary_op->op) {
@@ -386,8 +444,8 @@ void nyla::analysis::check_unary_op(nyla::aunary_op* unary_op) {
 		unary_op->type = nyla::types::type_error;
 		return;
 	}
-	if (!unary_op->factor->comptime) {
-		unary_op->comptime = false;
+	if (!unary_op->factor->comptime_compat) {
+		unary_op->comptime_compat = false;
 	}
 	switch (unary_op->op) {
 	case '-': case '+': {
@@ -403,6 +461,8 @@ void nyla::analysis::check_unary_op(nyla::aunary_op* unary_op) {
 	}
 	case '&': {
 		
+		unary_op->literal_constant = false;
+
 		if (!is_lvalue(unary_op->factor)) {
 			// TODO: produce error message
 			unary_op->type = nyla::types::type_error;
@@ -441,6 +501,8 @@ void nyla::analysis::check_unary_op(nyla::aunary_op* unary_op) {
 }
 
 void nyla::analysis::check_ident(sym_scope* lookup_scope, nyla::aident* ident) {
+	ident->literal_constant = false;
+
 	// Assumed a variable at this point
 	ident->sym_variable = m_sym_table->find_variable(lookup_scope, ident->ident_key);
 	if (ident->sym_variable) {
@@ -459,12 +521,13 @@ void nyla::analysis::check_ident(sym_scope* lookup_scope, nyla::aident* ident) {
 }
 
 void nyla::analysis::check_for_loop(nyla::afor_loop* for_loop) {
+	for_loop->literal_constant = false;
 	m_sym_scope = for_loop->sym_scope;
 	for (nyla::avariable_decl* var_decl : for_loop->declarations) {
 		check_expression(var_decl);
 		if (var_decl->type == nyla::types::type_error) return;
-		if (!var_decl->comptime) {
-			for_loop->comptime = false;
+		if (!var_decl->comptime_compat) {
+			for_loop->comptime_compat = false;
 		}
 	}
 	check_loop(dynamic_cast<nyla::aloop_expr*>(for_loop));
@@ -472,6 +535,7 @@ void nyla::analysis::check_for_loop(nyla::afor_loop* for_loop) {
 }
 
 void nyla::analysis::check_while_loop(nyla::awhile_loop* while_loop) {
+	while_loop->literal_constant = false;
 	m_sym_scope = while_loop->sym_scope;
 	check_loop(dynamic_cast<nyla::aloop_expr*>(while_loop));
 	m_sym_scope = m_sym_scope->parent;
@@ -480,29 +544,30 @@ void nyla::analysis::check_while_loop(nyla::awhile_loop* while_loop) {
 void nyla::analysis::check_loop(nyla::aloop_expr* loop) {
 	check_expression(loop->cond);
 	if (loop->cond->type == nyla::types::type_error) return;
-	if (!loop->cond->comptime) {
-		loop->comptime = false;
+	if (!loop->cond->comptime_compat) {
+		loop->comptime_compat = false;
 	}
 	if (loop->cond->type != nyla::types::type_bool) {
 		m_log.err(ERR_EXPECTED_BOOL_COND, loop->cond);
 	}
-	check_scope(loop->body, loop->comptime);
+	check_scope(loop->body, loop->comptime_compat);
 	for (nyla::aexpr* expr : loop->post_exprs) {
 		check_expression(expr);
-		if (!expr->comptime) loop->comptime = false;
+		if (!expr->comptime_compat) loop->comptime_compat = false;
 	}
 }
 
 void nyla::analysis::check_type_cast(nyla::atype_cast* type_cast) {
 	// TODO: ensure it is a valid cast
 	check_expression(type_cast->value);
-	if (!type_cast->comptime) type_cast->comptime = false;
+	if (!type_cast->comptime_compat) type_cast->comptime_compat = false;
 }
 
 void nyla::analysis::check_function_call(bool static_call,
 	                                     sym_module* lookup_module,
 	                                     nyla::afunction_call* function_call,
 	                                     bool is_constructor) {
+	
 	// Checking types of arguments
 	for (nyla::aexpr* argument : function_call->arguments) {
 		check_expression(argument);
@@ -510,12 +575,8 @@ void nyla::analysis::check_function_call(bool static_call,
 			function_call->type = nyla::types::type_error;
 			return;
 		}
-		if (!argument->comptime) function_call->comptime = false;
+		if (!argument->comptime_compat) function_call->comptime_compat = false;
 	}
-
-	// TODO: If the function being called has a comptime modifier
-	// then the function_call should be allowed to also be comptime
-	function_call->comptime = false;
 
 	std::vector<sym_function*> canidates;
 	if (is_constructor) {
@@ -606,17 +667,24 @@ void nyla::analysis::check_function_call(sym_function* called_function,
 	for (u32 i = 0; i < called_function->param_types.size(); i++) {
 		attempt_assignment(called_function->param_types[i], function_call->arguments[i]);
 	}
+
+	bool called_has_comptime = function_call->called_function->sym_module->mods & MOD_COMPTIME;
+
+	function_call->comptime_compat  = called_has_comptime;
+	function_call->literal_constant = called_has_comptime;
 }
 
 void nyla::analysis::check_array_access(sym_scope* lookup_scope, nyla::aarray_access* array_access) {
+	array_access->literal_constant = false;
+
 	check_ident(lookup_scope, array_access->ident);
 	if (array_access->ident->type == nyla::types::type_error) {
 		array_access->type = nyla::types::type_error;
 		return;
 	}
 
-	if (!array_access->ident->comptime) {
-		array_access->comptime = false;
+	if (!array_access->ident->comptime_compat) {
+		array_access->comptime_compat = false;
 	}
 
 	nyla::type* type_at_index = array_access->ident->type;
@@ -639,7 +707,7 @@ void nyla::analysis::check_array_access(sym_scope* lookup_scope, nyla::aarray_ac
 			return;
 		}
 
-		if (!index->comptime) array_access->comptime = false;
+		if (!index->comptime_compat) array_access->comptime_compat = false;
 
 		type_at_index = type_at_index->element_type;
 	}
@@ -658,6 +726,7 @@ void nyla::analysis::check_array_access(sym_scope* lookup_scope, nyla::aarray_ac
 }
 
 void nyla::analysis::check_array(nyla::aarray* arr, u32 depth) {
+	arr->literal_constant = false;
 	if (arr->type == nyla::types::type_error) return;
 
 	bool        last_nesting_level = false;
@@ -676,7 +745,7 @@ void nyla::analysis::check_array(nyla::aarray* arr, u32 depth) {
 			return;
 		}
 
-		if (!element->comptime) arr->comptime = false;
+		if (!element->comptime_compat) arr->comptime_compat = false;
 	}
 
 	if (last_nesting_level) {
@@ -687,6 +756,8 @@ void nyla::analysis::check_array(nyla::aarray* arr, u32 depth) {
 }
 
 void nyla::analysis::check_var_object(nyla::avar_object* var_object) {
+	var_object->literal_constant = false;
+
 	nyla::afunction_call* constructor_call = var_object->constructor_call;
 	
 	u32 module_name_key = var_object->constructor_call->name_key;
@@ -710,20 +781,21 @@ void nyla::analysis::check_var_object(nyla::avar_object* var_object) {
 			var_object->type = nyla::types::type_error;
 			return;
 		}
-		if (!constructor_call->comptime) var_object->comptime = false;
+		if (!constructor_call->comptime_compat) var_object->comptime_compat = false;
 		var_object->type = nyla::type::get_or_enter_module(sym_module);
 	}
 }
 
 void nyla::analysis::check_dot_op(nyla::adot_op* dot_op) {
+	
+	// TODO: literal_constant
+	// TODO: comptime checking
 
-	// TODO comptime checking
-
-#define LAST idx+1 == dot_op->factor_list.size()
+#define LAST (idx+1 == dot_op->factor_list.size())
 
 	sym_scope*  ref_scope  = m_sym_scope;
 	sym_module* ref_module = m_sym_module;
-	bool static_context = true;
+	bool static_context = true; // False when inside member function?
 	for (u32 idx = 0; idx < dot_op->factor_list.size(); idx++) {
 		nyla::aexpr*  factor = dot_op->factor_list[idx];
 		u32 factor_name_key;
@@ -751,6 +823,9 @@ void nyla::analysis::check_dot_op(nyla::adot_op* dot_op) {
 				}
 			}
 
+			// TODO: Fix issues in which the user wants
+			// to reference static fields but is not
+			// accessing them from a static context
 			check_ident(ref_scope, ident);
 			factor_name_key = ident->ident_key;
 
@@ -830,6 +905,9 @@ void nyla::analysis::check_dot_op(nyla::adot_op* dot_op) {
 
 void nyla::analysis::check_if(nyla::aif* ifstmt) {
 	
+	// Always false since you cant assign an ifstmt
+	ifstmt->literal_constant = false;
+
 	bool all_if_scopes_return = true;
 	bool comptime = true;
 	nyla::aif* cur_if = ifstmt;
@@ -840,10 +918,10 @@ void nyla::analysis::check_if(nyla::aif* ifstmt) {
 		if (cur_if->cond->type != nyla::types::type_bool) {
 			m_log.err(ERR_EXPECTED_BOOL_COND, cur_if->cond);
 		}
-		if (!cur_if->cond->comptime) comptime = false;
+		if (!cur_if->cond->comptime_compat) comptime = false;
 
 		m_sym_scope = cur_if->sym_scope;
-		check_scope(cur_if->body, ifstmt->comptime);
+		check_scope(cur_if->body, ifstmt->comptime_compat);
 		if (!m_sym_scope->found_return) {
 			all_if_scopes_return = false;
 		}
@@ -851,7 +929,7 @@ void nyla::analysis::check_if(nyla::aif* ifstmt) {
 
 		if (cur_if->else_sym_scope) {
 			m_sym_scope = cur_if->else_sym_scope;
-			check_scope(cur_if->else_body, ifstmt->comptime);
+			check_scope(cur_if->else_body, ifstmt->comptime_compat);
 			if (!m_sym_scope->found_return) {
 				all_if_scopes_return = false;
 			}
@@ -863,7 +941,7 @@ void nyla::analysis::check_if(nyla::aif* ifstmt) {
 		cur_if = cur_if->else_if;
 	}
 	if (!comptime) {
-		ifstmt->comptime = false;
+		ifstmt->comptime_compat = false;
 	}
 
 	if (all_if_scopes_return) {
@@ -872,7 +950,7 @@ void nyla::analysis::check_if(nyla::aif* ifstmt) {
 }
 
 void nyla::analysis::check_scope(const std::vector<nyla::aexpr*>& stmts, bool& comptime) {
-	
+
 	for (nyla::aexpr* stmt : stmts) {
 		if (m_sym_scope->found_return) {
 			// TODO: may need to mark the rest of the statements with nyla::types::type_error
@@ -880,7 +958,7 @@ void nyla::analysis::check_scope(const std::vector<nyla::aexpr*>& stmts, bool& c
 			break;
 		}
 		check_expression(stmt);
-		if (!stmt->comptime) {
+		if (!stmt->comptime_compat) {
 			comptime = false;
 		}
 	}
@@ -970,7 +1048,7 @@ nyla::aexpr* nyla::analysis::make_cast(nyla::aexpr* value, nyla::type* to_type) 
 	nyla::atype_cast* type_cast = make<nyla::atype_cast>(AST_TYPE_CAST, value);
 	type_cast->value = value;
 	type_cast->type = to_type;
-	type_cast->comptime = value->comptime;
+	type_cast->comptime_compat = value->comptime_compat;
 	return type_cast;
 }
 

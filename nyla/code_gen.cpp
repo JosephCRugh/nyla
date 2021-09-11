@@ -4,7 +4,6 @@
 #include <llvm/Support/Host.h>
 #include <llvm/Support/TargetRegistry.h>
 #include <llvm/Support/TargetSelect.h>
-#include <llvm/Target/TargetMachine.h>
 #include <llvm/Target/TargetOptions.h>
 
 // Needed for writing .o files
@@ -18,7 +17,7 @@ void nyla::init_llvm_native_target() {
 	llvm::InitializeNativeTargetAsmPrinter();
 }
 
-bool nyla::write_obj_file(c_string fname, llvm::Module* llvm_module) {
+llvm::TargetMachine* nyla::write_obj_file(c_string fname, llvm::Module* llvm_module) {
 
 	auto target_triple = llvm::sys::getDefaultTargetTriple();
 	llvm_module->setTargetTriple(target_triple);
@@ -28,7 +27,7 @@ bool nyla::write_obj_file(c_string fname, llvm::Module* llvm_module) {
 
 	if (!target) {
 		llvm::errs() << target_error;
-		return false;
+		return nullptr;
 	}
 
 	auto CPU = "generic";
@@ -36,7 +35,7 @@ bool nyla::write_obj_file(c_string fname, llvm::Module* llvm_module) {
 
 	llvm::TargetOptions opt;
 	auto RM = llvm::Optional<llvm::Reloc::Model>();
-	auto target_machine =
+	llvm::TargetMachine* target_machine =
 		target->createTargetMachine(target_triple, CPU, features, opt, RM);
 
 	llvm_module->setDataLayout(target_machine->createDataLayout());
@@ -46,17 +45,17 @@ bool nyla::write_obj_file(c_string fname, llvm::Module* llvm_module) {
 
 	if (err) {
 		llvm::errs() << "Could not open file: " << err.message();
-		return false;
+		return nullptr;
 	}
 
 	llvm::legacy::PassManager pass;
 	if (target_machine->addPassesToEmitFile(pass, dest, nullptr, llvm::CGFT_ObjectFile)) {
 		llvm::errs() << "TheTargetMachine can't emit a file of this type";
-		return false;
+		return nullptr;
 	}
 
 	pass.run(*llvm_module);
 	dest.flush();
 
-	return true;
+	return target_machine;
 }

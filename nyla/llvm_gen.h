@@ -3,6 +3,7 @@
 
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/IRBuilder.h>
+#include <functional>
 
 #include "compiler.h"
 #include "ast.h"
@@ -23,6 +24,8 @@ namespace nyla {
 	class llvm_generator {
 	public:
 
+		~llvm_generator();
+
 		llvm_generator(nyla::compiler& compiler, llvm::Module* llvm_module,
 			           nyla::afile_unit* file_unit, bool print);
 
@@ -36,6 +39,8 @@ namespace nyla {
 		void gen_module(nyla::amodule* nmodule);
 
 		void gen_function_declaration(nyla::afunction* function);
+		llvm::Value* gen_global_variable(nyla::avariable_decl* global);
+		llvm::Constant* gen_global_module(nyla::avariable_decl* static_module);
 
 		void gen_function_body(nyla::afunction* function);
 
@@ -45,8 +50,8 @@ namespace nyla {
 		// will load those values
 		llvm::Value* gen_expr_rvalue(nyla::aexpr* expr);
 
-		llvm::Value* gen_variable_decl(nyla::avariable_decl* variable_decl);
-
+		llvm::Value* gen_variable_decl(nyla::avariable_decl* variable_decl, bool allocate_decl);
+		
 		llvm::Value* gen_return(nyla::areturn* ret);
 
 		llvm::Value* gen_number(nyla::anumber* number);
@@ -67,7 +72,7 @@ namespace nyla {
 			                        const std::vector<llvm::Constant*>& ll_element_values,
 			                        llvm::Value* ll_arr_ptr);
 
-		llvm::Value* gen_array_access(nyla::aarray_access* array_access);
+		llvm::Value* gen_array_access(llvm::Value* ll_location, nyla::aarray_access* array_access);
 
 		llvm::Value* gen_type_cast(nyla::atype_cast* type_cast);
 
@@ -121,6 +126,8 @@ namespace nyla {
 		// a variable
 		bool m_initializing_module = false;
 		
+		bool m_initializing_globals = false;
+
 		// Print the IR to console or not
 		bool m_print;
 	};

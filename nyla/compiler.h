@@ -4,6 +4,7 @@
 #include <string>
 #include <unordered_map>
 #include <llvm/IR/Module.h>
+#include <llvm/Target/TargetMachine.h>
 
 #include "sym_table.h"
 #include "log.h"
@@ -78,6 +79,9 @@ namespace nyla {
 		void set_main_function_file(const std::string& main_function_path);
 		void set_executable_name(const std::string& executable_name);
 
+		// Cleanup anything allocated
+		void completely_cleanup();
+
 	private:
 
 		// Searches for .nyla files in the directory. Decends into sub-directories
@@ -145,6 +149,8 @@ namespace nyla {
 		bool        m_main_function_file_set = false;
 
 		std::string m_executable_name = "program.exe";
+
+		llvm::TargetMachine* m_llvm_target_machine = nullptr;
 
 	};
 

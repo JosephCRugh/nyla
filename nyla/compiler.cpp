@@ -87,7 +87,7 @@ void nyla::compiler::compile(const std::vector<std::string>& src_directories) {
 	std::string obj_name = m_executable_name + ".o";
 	
 	u64 compile_st = nyla::get_time_in_milliseconds();
-	nyla::write_obj_file(obj_name.c_str(), m_llvm_module);
+	m_llvm_target_machine = nyla::write_obj_file(obj_name.c_str(), m_llvm_module);
 	u64 compile_time = nyla::get_time_in_milliseconds() - compile_st;
 
 	u64 link_st = nyla::get_time_in_milliseconds();
@@ -128,6 +128,7 @@ void nyla::compiler::set_main_function(sym_function* main_function) {
 		// TODO: probably want to tell location of where the multiple main
 		// functions were found
 		m_log.global_error(ERR_MULTIPLE_MAIN_FUNCTIONS_IN_PROGRAM);
+		m_found_compilation_errors = true;
 	}
 	m_main_function = main_function;
 }
@@ -416,6 +417,11 @@ our_sym_table->m_found_compilation_errors = true; \
 	llvm_generator.gen_file_unit();
 	m_total_ir_gen_time_in_milliseconds += nyla::get_time_in_milliseconds() - it_gen_st;
 
+	parse_st = nyla::get_time_in_milliseconds();
+	// No longer need the AST so to free up memory deleting it
+	delete file_unit;
+	m_total_parse_time_in_milliseconds += nyla::get_time_in_milliseconds() - parse_st;
+
 #undef ERROR_RETURN
 }
 
@@ -428,4 +434,15 @@ void nyla::compiler::analyze_file(sym_table* sym_table) {
 	sym_table->get_analysis()->check_file_unit();
 	m_total_parse_time_in_milliseconds += nyla::get_time_in_milliseconds() - parse_st;
 	
+}
+
+void nyla::compiler::completely_cleanup() {
+	nyla::g_type_table->clear_table();
+	nyla::g_word_table->clear_table();
+	delete m_llvm_module;
+	delete nyla::llvm_context;
+	// TargetMachine gets up a lot of memory
+	if (m_llvm_target_machine) {
+		delete m_llvm_target_machine;
+	}
 }

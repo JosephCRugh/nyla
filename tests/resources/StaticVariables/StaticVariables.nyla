@@ -1,0 +1,41 @@
+module InnerModule {
+	int c = 44;
+	int[] g = {99,98,97,96};
+}
+
+module StaticVariables {
+
+	static int func(int y) {
+		return y * 4;
+	}
+	
+	static int a = 4;
+	static int b = func(77);
+	static int c;
+	static int[4] d = {55,124};
+	
+	int x1 = 14;
+	int x2 = 241 + 52; // Testing to make sure folding occures
+	int x3;
+	int[2] x4 = {55,11}; 
+	InnerModule innerModule = var InnerModule();
+	
+	static StaticVariables yyy = var StaticVariables();
+
+	static int abc1 = 4;
+
+	// var_decl="abc2"
+	//    assignment:
+	//       bin_op: '='
+	//           "abc2"
+	//            bin_op: '+'
+	//               "abc1" << Here it will set the tree to not be a literal_constant
+	//                7
+	static int abc2 = abc1 + 7;
+
+	public static int main() {
+		return yyy.innerModule.c + yyy.x1 + yyy.x2 + yyy.x3 +
+			   yyy.x4[1] + abc1 + abc2 + yyy.innerModule.g[2] +
+			   a + b + c + d[1];
+	}
+}

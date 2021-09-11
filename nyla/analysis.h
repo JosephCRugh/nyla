@@ -22,6 +22,11 @@ namespace nyla {
 
 		void check_module(nyla::amodule* nmodule);
 
+		// Prevent allocating a field which results in allocating
+		// of the module trying to be allocated for. Checking for circular
+		// fields
+		bool check_circular_fields(nyla::avariable_decl* original_field, sym_module* sym_module, u32 unique_module_key);
+
 		void check_expression(nyla::aexpr* expr);
 
 		void check_function(nyla::afunction* function);

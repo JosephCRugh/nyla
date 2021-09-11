@@ -291,8 +291,9 @@ nyla::amodule* nyla::parser::parse_module() {
 	nmodule->sym_module->unique_module_id = m_compiler.get_new_unique_module_id();
 	m_file_unit->loaded_modules[nmodule->name_key] = nmodule->sym_module;
 
+
 	// Entering in the module type
-	nyla::type::get_or_enter_module(nmodule->sym_module);
+	nyla::type* module_type = nyla::type::get_or_enter_module(nmodule->sym_module);
 
 	// Checking for forward declared types
 	auto it = m_forward_declared_types.find(nmodule->name_key);
@@ -330,13 +331,20 @@ nyla::amodule* nyla::parser::parse_module() {
 					m_field_mode = true;
 					nyla::avariable_decl* var_decl = parse_variable_decl(mods, type, ident, true);
 					u32 last = nmodule->fields.size();
-					parse_assignment_list(var_decl, nmodule->fields, true);
+					bool is_static = mods & MOD_STATIC;
+					if (is_static) {
+						parse_assignment_list(var_decl, nmodule->globals, true);
+					} else {
+						parse_assignment_list(var_decl, nmodule->fields, true);
+					}
 					m_field_mode = false;
-					for (u32 i = last; i < nmodule->fields.size(); i++) {
-						nyla::avariable_decl* field = nmodule->fields[i];
-						field->sym_variable->is_field = true;
-						field->sym_variable->field_index = field_count++;
-						nmodule->sym_module->fields.push_back(field);
+					if (!is_static) {
+						for (u32 i = last; i < nmodule->fields.size(); i++) {
+							nyla::avariable_decl* field = nmodule->fields[i];
+							field->sym_variable->is_field = true;
+							field->sym_variable->field_index = field_count++;
+							nmodule->sym_module->fields.push_back(field);
+						}
 					}
 					parse_semis();
 				}
@@ -647,6 +655,7 @@ nyla::avariable_decl* nyla::parser::parse_variable_decl(u32 mods,
 	sym_variable->mods = mods;
 	variable_decl->sym_variable = sym_variable;
 	variable_decl->sym_variable->position_declared_at = ident->spos;
+	variable_decl->sym_variable->is_global = mods & MOD_STATIC;
 
 	sym_variable->arr_dim_sizes = dim_sizes;
 	
@@ -1015,6 +1024,7 @@ nyla::aexpr* nyla::parser::on_binary_op(const nyla::token& op_token, nyla::aexpr
 		op_op->lhs = lhs;
 		op_op->rhs = rhs;
 		eq_op->lhs = lhs;
+		eq_op->reuses_lhs = true;
 		eq_op->rhs = op_op;
 		return eq_op;
 	};

@@ -3,12 +3,13 @@
 
 #include "types_ext.h"
 #include <llvm/IR/Module.h>
+#include <llvm/Target/TargetMachine.h>
 
 namespace nyla {
 	
 	void init_llvm_native_target();
 
-	bool write_obj_file(c_string fname, llvm::Module* llvm_module);
+	llvm::TargetMachine* write_obj_file(c_string fname, llvm::Module* llvm_module);
 
 }
 

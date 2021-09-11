@@ -74,14 +74,20 @@ namespace nyla {
 	 * nodes extend from.
 	 */
 	struct ast_node {
+		virtual ~ast_node();
+
 		ast_tag tag;
 		u32     line_num;
 		u32     spos, epos;
 
-		bool comptime = true; // Tells whether or not the node is able to be
-		                      // computed at compilation time or not. This does
-		                      // not mean it is computed at compilation time simply
-		                      // that it can be.
+		bool comptime_compat = true;  // Tells whether or not the node is able to be
+		                              // computed at compilation time or not. This does
+		                              // not mean it is computed at compilation time simply
+		                              // that it can be.
+		bool literal_constant = true; // Tells wether or not the node is able to be computed
+		                              // as a literal constant such as numbers, bools, other
+		                              // nodes with comptime modifier. Essentially anything that
+		                              // can be folded by llvm and directly assigned to memory.
 
 		virtual void print(std::ostream& os, u32 depth = 0) const = 0;
 
@@ -111,6 +117,8 @@ namespace nyla {
 	 * of a file.
 	 */
 	struct afile_unit : public ast_node {
+		virtual ~afile_unit() override;
+
 		std::vector<nyla::amodule*> modules;
 
 		std::unordered_map<std::string, aimport*> imports;
@@ -128,6 +136,8 @@ namespace nyla {
 	};
 
 	struct aimport : public ast_node {
+		virtual ~aimport() override {}
+
 		std::string                  path;
 		// original name -> alias name
 		std::unordered_map<u32, u32> module_aliases;
@@ -137,9 +147,12 @@ namespace nyla {
 	};
 
 	struct amodule : public ast_node {
+		virtual ~amodule() override;
 		u32 name_key; // Identifier name key
 		              // into the symbol table.
 		std::vector<nyla::afunction*>      constructors;
+
+		std::vector<nyla::avariable_decl*> globals; // fields marked as static
 		std::vector<nyla::avariable_decl*> fields;
 		std::vector<nyla::afunction*>      functions;
 		// The module symbol stored in the sym_table
@@ -151,6 +164,8 @@ namespace nyla {
 	};
 
 	struct afunction : public ast_node {
+		virtual ~afunction() override;
+
 		nyla::type*                        return_type;
 		u32                                name_key;
 		std::vector<nyla::avariable_decl*> parameters;
@@ -179,13 +194,18 @@ namespace nyla {
 
 
 	struct aexpr : public ast_node {
+		virtual ~aexpr() override {}
+
 		nyla::type* type = nullptr; // Type checked during analysis
 		bool        global_initializer_expr = false;
-	
+		bool        reuses_lhs = false;
+
 		std::string expr_header(u32 depth) const;
 	};
 
 	struct avariable_decl : public aexpr {
+		virtual ~avariable_decl() override;
+
 		u32           name_key;
 		nyla::aexpr*  assignment   = nullptr;
 		sym_variable* sym_variable = nullptr; // Variable in the symbol table
@@ -196,6 +216,8 @@ namespace nyla {
 	};
 
 	struct aident : public aexpr {
+		virtual ~aident() override {}
+
 		u32 ident_key;
 		// Behaves as .length operator
 		bool is_array_length = false;
@@ -209,6 +231,8 @@ namespace nyla {
 
 	// Creates a new object on the stack
 	struct avar_object : public aexpr {
+		virtual ~avar_object() override {}
+
 		nyla::afunction_call* constructor_call;
 		nyla::sym_module*     sym_module;
 		bool assumed_default_constructor = false;
@@ -216,12 +240,16 @@ namespace nyla {
 	};
 
 	struct areturn : public aexpr {
+		virtual ~areturn() override;
+
 		nyla::aexpr* value = nullptr;
 
 		virtual void print(std::ostream& os, u32 depth = 0) const override;
 	};
 
 	struct aarray : public aexpr {
+		virtual ~aarray() override;
+
 		  // How many elements. Might differ from elements.size()
 		  // in the case of default initialization Ex. int[n] a;
 		  //                                               ^
@@ -232,6 +260,8 @@ namespace nyla {
 	};
 
 	struct aloop_expr : public aexpr {
+		virtual ~aloop_expr() override;
+
 		nyla::aexpr* cond = nullptr;
 		nyla::sym_scope* sym_scope = nullptr;
 		std::vector<nyla::aexpr*> body;
@@ -243,20 +273,28 @@ namespace nyla {
 	};
 
 	struct afor_loop : public aloop_expr {
+		virtual ~afor_loop() override;
+
 		std::vector<nyla::avariable_decl*> declarations;
 
 		virtual void print(std::ostream& os, u32 depth = 0) const override;
 	};
 
 	struct awhile_loop : public aloop_expr {
+		virtual ~awhile_loop() override {}
+
 		virtual void print(std::ostream& os, u32 depth = 0) const override;
 	};
 
 	struct acontrol : public aexpr {
+		virtual ~acontrol() override {}
+
 		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	struct aif : public aexpr {
+		virtual ~aif() override;
+
 		nyla::aexpr*              cond;
 		nyla::sym_scope*          sym_scope = nullptr;
 		std::vector<nyla::aexpr*> body;
@@ -268,6 +306,8 @@ namespace nyla {
 	};
 
 	struct aunary_op : public aexpr {
+		virtual ~aunary_op() override;
+
 		u32 op;
 		nyla::aexpr* factor;
 
@@ -275,14 +315,18 @@ namespace nyla {
 	};
 
 	struct abinary_op : public aexpr {
+		virtual ~abinary_op() override;
+
 		u32 op;
-		nyla::aexpr* lhs;
-		nyla::aexpr* rhs;
+		nyla::aexpr* lhs = nullptr;
+		nyla::aexpr* rhs = nullptr;
 
 		virtual void print(std::ostream& os, u32 depth = 0) const override;
 	};
 
 	struct adot_op : public aexpr {
+		virtual ~adot_op() override;
+
 		// Must contain at least 2 factors
 		std::vector<nyla::aexpr*> factor_list;
 
@@ -290,11 +334,15 @@ namespace nyla {
 	};
 
 	struct atype_cast : public aexpr {
+		virtual ~atype_cast() override;
+
 		nyla::aexpr* value = nullptr;
 		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	struct afunction_call : public aexpr {
+		virtual ~afunction_call() override;
+
 		u32                       name_key;
 		std::vector<nyla::aexpr*> arguments;
 		sym_function*             called_function = nullptr;
@@ -302,6 +350,8 @@ namespace nyla {
 	};
 
 	struct anumber : public aexpr {
+		virtual ~anumber() override {}
+
 		union {
 			s32    value_int;
 			s64    value_long;
@@ -314,6 +364,8 @@ namespace nyla {
 	};
 
 	struct abool : public aexpr {
+		virtual ~abool() override {}
+
 		bool tof;
 		virtual void print(std::ostream& os, u32 depth) const override;
 	};
@@ -321,6 +373,7 @@ namespace nyla {
 	// In cases where expressions cannot be parsed
 	// correctly err_expr is generated instead
 	struct err_expr : public aexpr {
+		virtual ~err_expr() override {}
 
 		virtual void print(std::ostream& os, u32 depth = 0) const override;
 	};
@@ -328,12 +381,15 @@ namespace nyla {
 	// TODO: Array accesses need the ability to access
 	// arrays from function calls not just variables
 	struct aarray_access : public aexpr {
+		virtual ~aarray_access() override;
+
 		nyla::aident*             ident;
 		std::vector<nyla::aexpr*> indexes;
 		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 
 	struct astring : public aexpr {
+		virtual ~astring() override {}
 
 		// Not sure I should be trusting C++ with string efficiency
 

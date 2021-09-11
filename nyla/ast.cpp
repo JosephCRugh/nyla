@@ -3,6 +3,10 @@
 #include "words.h"
 #include "tokens.h"
 
+nyla::ast_node::~ast_node() {
+
+}
+
 std::string nyla::ast_node::word_to_string(u32 word_key) const {
 	return std::string(g_word_table->get_word(word_key).c_str());
 }
@@ -28,6 +32,11 @@ std::string nyla::aexpr::expr_header(u32 depth) const {
 	return indent(depth) + "(" + (type != nullptr ? "1" : "0") + ") ";
 }
 
+
+nyla::afile_unit::~afile_unit() {
+	for (nyla::amodule* nmodule : modules) delete nmodule;
+	for (auto& pair: imports) delete pair.second;
+}
 
 nyla::sym_module* nyla::afile_unit::find_module(u32 name_key) {
 	auto it = loaded_modules.find(name_key);
@@ -63,6 +72,16 @@ void nyla::aimport::print(std::ostream& os, u32 depth) const {
 	}
 }
 
+nyla::amodule::~amodule() {
+	for (nyla::afunction* constructor : constructors)
+		delete constructor;
+	for (nyla::afunction* function : functions)
+		delete function;
+
+	// Not deleting fields since they are constantly reused
+	// in the symbol table
+}
+
 void nyla::amodule::print(std::ostream& os, u32 depth) const {
 	os << indent(depth) << "module=\"" << word_to_string(name_key) << "\"";
 	os << " " << mods_as_string(sym_module->mods) << '\n';
@@ -83,6 +102,12 @@ void nyla::amodule::print(std::ostream& os, u32 depth) const {
 	}
 }
 
+nyla::afunction::~afunction() {
+	for (nyla::avariable_decl* param : parameters)
+		delete param;
+	for (nyla::aexpr* stmt : stmts) delete stmt;
+}
+
 bool nyla::afunction::is_external() const {
 	return sym_function->mods & nyla::modifier::MOD_EXTERNAL;
 }
@@ -96,6 +121,12 @@ void nyla::afunction::print(std::ostream& os, u32 depth) const {
 		stmt->print(os, depth + 1);
 		os << '\n';
 	}
+}
+
+nyla::avariable_decl::~avariable_decl() {
+	// If there is an assignment then it
+	// it deleted by the '=' binary operator
+	if (!assignment) delete ident;
 }
 
 void nyla::avariable_decl::print(std::ostream& os, u32 depth) const {
@@ -117,9 +148,17 @@ void nyla::areturn::print(std::ostream& os, u32 depth) const {
 		value->print(os, depth + 1);
 }
 
+nyla::areturn::~areturn() {
+	delete value;
+}
+
 void nyla::aunary_op::print(std::ostream& os, u32 depth) const {
 	os << expr_header(depth) << "unary_op: '" << nyla::token_tag_to_string(op) << "'\n";
 	factor->print(os, depth + 1);
+}
+
+nyla::aunary_op::~aunary_op() {
+	delete factor;
 }
 
 void nyla::abinary_op::print(std::ostream& os, u32 depth) const {
@@ -128,6 +167,11 @@ void nyla::abinary_op::print(std::ostream& os, u32 depth) const {
 	lhs->print(os, depth + 1);
 	os << '\n';
 	rhs->print(os, depth + 1);
+}
+
+nyla::abinary_op::~abinary_op() {
+	if (!reuses_lhs) delete lhs;
+	delete rhs;
 }
 
 void nyla::anumber::print(std::ostream& os, u32 depth) const {
@@ -183,6 +227,10 @@ void nyla::atype_cast::print(std::ostream& os, u32 depth) const {
 	value->print(os, depth + 1);
 }
 
+nyla::atype_cast::~atype_cast() {
+	delete value;
+}
+
 void nyla::astring::print(std::ostream& os, u32 depth) const {
 	// TODO: replace escapes with proper output
 	os << expr_header(depth) << "str8=\"" << lit8 << "\"";
@@ -207,6 +255,11 @@ void nyla::afor_loop::print(std::ostream& os, u32 depth) const {
 	}
 }
 
+nyla::afor_loop::~afor_loop() {
+	for (nyla::avariable_decl* decl : declarations)
+		delete decl;
+}
+
 void nyla::awhile_loop::print(std::ostream& os, u32 depth) const {
 	os << indent(depth) << "while_loop: " << '\n';
 	os << indent(depth) << "loop_condition:" << '\n';
@@ -219,6 +272,14 @@ void nyla::awhile_loop::print(std::ostream& os, u32 depth) const {
 		stmt->print(os, depth + 1);
 		os << '\n';
 	}
+}
+
+nyla::aloop_expr::~aloop_expr() {
+	delete cond;
+	for (nyla::aexpr* stmt : body)
+		delete stmt;
+	for (nyla::aexpr* stmt : post_exprs)
+		delete stmt;
 }
 
 void nyla::acontrol::print(std::ostream& os, u32 depth) const {
@@ -244,12 +305,26 @@ void nyla::aif::print(std::ostream& os, u32 depth) const {
 	}
 }
 
+nyla::aif::~aif() {
+	delete cond;
+	for (nyla::aexpr* stmt : body)
+		delete stmt;
+	if (else_if) delete else_if;
+	for (nyla::aexpr* stmt : else_body)
+		delete stmt;
+}
+
 void nyla::afunction_call::print(std::ostream& os, u32 depth) const {
 	os << expr_header(depth) << "function call: " << word_to_string(name_key) << '\n';
 	for (nyla::aexpr* parameter_value : arguments) {
 		parameter_value->print(os, depth + 1);
 		os << '\n';
 	}
+}
+
+nyla::afunction_call::~afunction_call() {
+	for (nyla::aexpr* argument : arguments)
+		delete argument;
 }
 
 void nyla::adot_op::print(std::ostream& os, u32 depth) const {
@@ -262,6 +337,11 @@ void nyla::adot_op::print(std::ostream& os, u32 depth) const {
 		os << '\n';
 		rhs->print(os, depth + 1);
 	}
+}
+
+nyla::adot_op::~adot_op() {
+	for (nyla::aexpr* factor : factor_list)
+		delete factor;
 }
 
 void nyla::aarray_access::print(std::ostream& os, u32 depth) const {
@@ -284,8 +364,19 @@ void nyla::aarray::print(std::ostream& os, u32 depth) const {
 	}
 }
 
+nyla::aarray::~aarray() {
+	for (nyla::aexpr* element : elements) {
+		delete element;
+	}
+}
+
 void nyla::avar_object::print(std::ostream& os, u32 depth) const {
 	os << expr_header(depth) << "var" << '\n';
 	constructor_call->print(os, depth + 1);
 }
 
+nyla::aarray_access::~aarray_access() {
+	delete ident;
+	for (nyla::aexpr* index : indexes)
+		delete index;
+}

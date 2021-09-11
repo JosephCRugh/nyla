@@ -17,8 +17,7 @@ void test_program(const std::string& sub_project, int test_error_code, u32 extra
 		int return_code = system("nyla_test_project.exe");
 		check_eq(return_code, test_error_code);
 	}
-	nyla::g_type_table->clear_table();
-	nyla::g_word_table->clear_table();
+	compiler.completely_cleanup();
 }
 
 int main(int argc, char* argv[]) {
@@ -75,6 +74,8 @@ int main(int argc, char* argv[]) {
 		}
 		return sum * 3;
 		}());
+	test_program("StaticVariables",
+		44 + 97 + 4 + 77*4 + 124 + 14 + 241 + 52 + 11 + 4 + 7 + 4);
 
 	return 0;
 }
