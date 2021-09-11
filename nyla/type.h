@@ -1,14 +1,20 @@
-#pragma once
+#ifndef NYLA_TYPE_H
+#define NYLA_TYPE_H
 
 #include "types_ext.h"
-#include "token.h"
-#include <iostream>
+
+#include <assert.h>
+#include <unordered_map>
 
 namespace nyla {
 
+	// Maximum subscripts for * and []
+	static constexpr u32 MAX_SUBSCRIPTS = 8;
+
 	enum type_tag {
 
-		TYPE_BYTE,
+		// Integers
+		TYPE_BYTE = 0,
 		TYPE_SHORT,
 		TYPE_INT,
 		TYPE_LONG,
@@ -18,122 +24,237 @@ namespace nyla {
 		TYPE_UINT,
 		TYPE_ULONG,
 
+		// Characters
+		TYPE_CHAR8,
+		TYPE_CHAR16,
+		TYPE_CHAR32,
+
+		// Floats
 		TYPE_FLOAT,
 		TYPE_DOUBLE,
+
+		// Other
 		TYPE_BOOL,
 		TYPE_VOID,
-		TYPE_CHAR16,
-		TYPE_STRING,
 		TYPE_ERROR,
+		TYPE_NULL,
 
-		TYPE_MIXED, // Mixed type is needed
-		            // because array initialization
-					// with {} can have mixed element
-					// types at parse prior to analysis
-					
 		TYPE_PTR,
 		TYPE_ARR,
 
-		TYPE_NULL
+		TYPE_MIXED, // Mixed type is needed
+					// because array initialization
+					// with {} can have mixed element
+					// types during parsing
+
+		TYPE_MODULE,
+
+		// Forward declared modules are
+		// temporary types used until the
+		// module type can be resolved and
+		// replace it
+		TYPE_FD_MODULE,
+
+		TYPE_STRING,
 
 	};
 
 	struct aexpr;
+	struct sym_module;
+	struct type_table;
+	struct type;
+
+	namespace types {
+		// Integers
+		extern nyla::type* type_byte;
+		extern nyla::type* type_short;
+		extern nyla::type* type_int;
+		extern nyla::type* type_long;
+		extern nyla::type* type_ubyte;
+		extern nyla::type* type_ushort;
+		extern nyla::type* type_uint;
+		extern nyla::type* type_ulong;
+		// Characters
+		extern nyla::type* type_char8;
+		extern nyla::type* type_char16;
+		extern nyla::type* type_char32;
+		// Floats
+		extern nyla::type* type_float;
+		extern nyla::type* type_double;
+		// Other
+		extern nyla::type* type_bool;
+		extern nyla::type* type_void;
+		extern nyla::type* type_error;
+		extern nyla::type* type_string;
+		extern nyla::type* type_null;
+		extern nyla::type* type_mixed;
+
+	}
 
 	struct type {
-		type_tag     tag;
-		nyla::type*  elem_type;
-		// Arrays have sizes for their dimensions
-		nyla::aexpr* dim_size;
-		u32          arr_depth = 0; // how many [] subscripts exist
-		u32          ptr_depth = 0; // how many * subscripts exist
+		type_tag tag;
+		nyla::type*  element_type       = nullptr;
+		u32          ptr_depth          = 0;
+		u32          arr_depth          = 0;
+		// Part of TYPE_MODULE
+		u32          unique_module_key  = 0;
+		sym_module*  sym_module         = nullptr;
+		// Part of TYPE_FD_MODULE
+		u32          fd_module_name_key = 0;
 
-		nyla::token* st = nullptr;
-		nyla::token* et = nullptr;
-
-		type() {}
 		type(type_tag _tag) : tag(_tag) {}
-		type(type_tag _tag, nyla::type* _elem_type)
-			: tag(_tag), elem_type(_elem_type) {}
-		type(type_tag _tag, nyla::type* _elem_type, nyla::aexpr* _dim_size)
-			: tag(_tag), elem_type(_elem_type), dim_size(_dim_size) {}
+		type(type_tag _tag, nyla::type* _element_type)
+			: tag(_tag), element_type(_element_type) {  }
 
-		static nyla::type* get_byte();
-		static nyla::type* get_short();
-		static nyla::type* get_int();
-		static nyla::type* get_long();
-		static nyla::type* get_ubyte();
-		static nyla::type* get_ushort();
-		static nyla::type* get_uint();
-		static nyla::type* get_ulong();
-		static nyla::type* get_float();
-		static nyla::type* get_double();
-		static nyla::type* get_bool();
-		static nyla::type* get_void();
-		static nyla::type* get_string();
-		static nyla::type* get_char16();
-		static nyla::type* get_mixed();
-		static nyla::type* get_error();
-		static nyla::type* get_null();
+		struct hash_gen {
+			ulen operator()(const nyla::type& type) const {
+				switch (type.tag) {
+				case TYPE_PTR: {
+					// TODO: could probably do with a better hash
+					// method
+					ulen hash = type.tag + type.ptr_depth;
+					hash ^= type.get_base_type()->tag;
+					return hash;
+				}
+				case TYPE_ARR: {
+					// TODO: could probably do with a better hash
+					// method
+					ulen hash = type.tag + type.arr_depth;
+					hash ^= type.get_base_type()->tag;
+					return hash;
+				}
+				case TYPE_MODULE: {
+					return type.tag + type.unique_module_key;
+				}
+				case TYPE_FD_MODULE: {
+					return type.tag + type.fd_module_name_key;
+				}
+				default:
+					return type.tag;
+				}
+			}
+		};
 
-		static nyla::type* get_arr(nyla::type* elem_type, nyla::aexpr* dim_size);
+		bool operator==(const nyla::type& o) const {
+			if (tag != o.tag) return false;
+			switch (tag) {
+			case TYPE_PTR: {
+				return ptr_depth == o.ptr_depth &&
+					   get_base_type() == o.get_base_type();
+			}
+			case TYPE_ARR: {
+				if (arr_depth != o.arr_depth) return false;
+				return arr_depth == o.arr_depth &&
+					   get_base_type() == o.get_base_type();
+			}
+			case TYPE_MODULE: {
+				return unique_module_key == o.unique_module_key;
+			}
+			case TYPE_FD_MODULE: {
+				return fd_module_name_key == o.fd_module_name_key;
+			}
+			default: return true;
+			}
+		}
 
-		static nyla::type* get_ptr(nyla::type* elem_type);
+		// Compares two types. Works for all types
+		// where-as the '==' only works on some
+		bool equals(const nyla::type* o) const;
 
-		void calculate_arr_depth();
+		std::string to_string() const;
 
+		// Recursively calculates the number of pointer '*'
+		// subscripts for the pointer and if the element_type is
+		// a pointer then it's pointer depth.
 		void calculate_ptr_depth();
 
-		nyla::type* get_array_at_depth(u32 req_depth, u32 depth = 0);
+		// Recursively calculates the number of pointer '[' ']'
+		// subscripts for the pointer and if the element_type is
+		// an array then it's array depth.
+		void calculate_arr_depth();
 
-		nyla::type* get_array_base_type();
+		// Retreive an integer type based on its size in bytes
+		// and if it is signed
+		static nyla::type* get_int(u32 mem_size, bool is_signed);
 
-		nyla::type* get_ptr_base_type();
-		
-		void set_array_base_type(nyla::type* type);
+		// Retreive a float type based on its size in bytes
+		static nyla::type* get_float(u32 mem_size);
 
-		friend std::ostream& operator<<(std::ostream& os, const nyla::type& type);
+		// Retreive a char type based on its size in bytes
+		static nyla::type* get_char(u32 mem_size);
 
-		void print_elem(std::ostream& os, type_tag elem_tag) const;
+		// Get a pointer to that to the type of element_type.
+		// element_type may be another pointer causes pointers
+		// to pointers
+		static nyla::type* get_ptr(nyla::type* element_type);
 
-		bool operator!=(const nyla::type& o);
+		// Get an array with element's of type element_type
+		static nyla::type* get_arr(nyla::type* element_type);
 
-		bool operator==(const nyla::type& o);
+		// Get/Enter a new module type based on the module's unique key accross
+		// the entire program
+		static nyla::type* get_or_enter_module(nyla::sym_module* sym_module);
 
-		u32 get_mem_size();
+		// Get a forward declared type based on the module's name key
+		// and it's internal path
+		static nyla::type* get_fd_module(nyla::type_table* local_type_table, u32 module_name_key);
 
-		bool is_int();
+		// Converts a forward declared type into a module type
+		void resolve_fd_type(nyla::sym_module* sym_module);
+
+		// Base type for pointers and arrays or returns
+		nyla::type* get_base_type() const;
+		nyla::type* get_arr_base_type() const;
+		nyla::type* get_ptr_base_type() const;
+
+		// Sets the base type for pointers and arrays
+		void set_base_type(nyla::type* base_type);
+
+		// 
+		nyla::type* get_sub_array(u32 depth, u32 depth_count = 0);
 
 		bool is_number();
 
-		bool is_signed();
+		bool is_int();
 
 		bool is_float();
+
+		bool is_signed();
+
+		bool is_char();
 
 		bool is_ptr();
 
 		bool is_arr();
 
+		bool is_module();
+
+		// Get the memory size in bytes
+		u32 mem_size();
+
 	};
 
-	namespace reuse_types {
-		extern nyla::type* byte_type;
-		extern nyla::type* short_type;
-		extern nyla::type* int_type;
-		extern nyla::type* long_type;
-		extern nyla::type* ubyte_type;
-		extern nyla::type* ushort_type;
-		extern nyla::type* uint_type;
-		extern nyla::type* ulong_type;
-		extern nyla::type* float_type;
-		extern nyla::type* double_type;
-		extern nyla::type* bool_type;
-		extern nyla::type* void_type;
-		extern nyla::type* string_type;
-		extern nyla::type* char16_type;
-		extern nyla::type* error_type;
-		extern nyla::type* mixed_type;
-		extern nyla::type* null_type;
-	}
+	struct type_info {
+		nyla::type* type = nullptr;
+		// Optional in case of arrays.
+		// Although parsed with types the dimension sizes
+		// are not actually part of the type. They are part
+		// of the variable to tell it how to perform allocation
+		std::vector<nyla::aexpr*> dim_sizes;
+	};
 
+	class type_table {
+	public:
+
+		nyla::type* find_type(nyla::type* type);
+
+		void clear_table();
+
+	private:
+		std::unordered_map<nyla::type, nyla::type*,
+			               nyla::type::hash_gen> table;
+	};
+	extern type_table* g_type_table;
 }
+
+#endif

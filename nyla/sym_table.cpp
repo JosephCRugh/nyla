@@ -1,38 +1,65 @@
 #include "sym_table.h"
 
-using namespace nyla;
+nyla::sym_module* nyla::sym_table::enter_module(u32 name_key) {
+	m_modules[name_key] = new sym_module;
+	return m_modules[name_key];
+}
 
-nyla::ascope* sym_table::push_scope(nyla::token* start_scope_token) {
-	nyla::ascope* scope = nyla::make_node<nyla::ascope>(AST_SCOPE, 
-		start_scope_token, start_scope_token);
-	if (!m_scopes.empty()) {
-		scope->parent = m_scopes.top();
+nyla::sym_module* nyla::sym_table::find_module(u32 name_key) {
+	auto it = m_modules.find(name_key);
+	if (it != m_modules.end()) {
+		return it->second;
 	}
-	m_scopes.push(scope);
-	return scope;
+	return nullptr;
 }
 
-void sym_table::pop_scope() {
-	m_scopes.pop();
+s32 nyla::sym_table::has_function_been_declared(sym_module* sym_module, u32 name_key,
+	                                             std::vector<nyla::type*> param_types) {
+	std::vector<sym_function*>& functions = sym_module->functions[name_key];
+	for (sym_function* function : functions) {
+		if (function->name_key != name_key) continue;
+		if (function->param_types.size() != param_types.size()) continue;
+		bool match = true;
+		for (u32 i = 0; i < param_types.size(); i++) {
+			if (!function->param_types[i]->equals(param_types[i])) {
+				match = false;
+				break;
+			}
+		}
+		if (!match) continue;
+		return function->line_num;
+	}
+	return -1;
 }
 
-void sym_table::store_function_decl(nyla::afunction* function) {
-	m_declared_functions[function->ident->name] = function;
+nyla::sym_function* nyla::sym_table::enter_function(sym_module* sym_module, u32 name_key) {
+	std::vector<sym_function*>& functions = sym_module->functions[name_key];
+	functions.push_back(new sym_function);
+	return functions.back();
 }
 
-nyla::afunction* sym_table::get_declared_function(nyla::name& name) {
-	return m_declared_functions[name];
+bool nyla::sym_table::has_variable_been_declared(u32 name_key, bool check_module_scope) {
+	sym_scope* scope = m_scope;
+	while (scope != nullptr) {
+		if (!check_module_scope && scope->is_module_scope) return false;
+		if (scope->variables.find(name_key) != scope->variables.end()) {
+			return true;
+		}
+		scope = scope->parent;
+	}
+	return false;
 }
 
-void sym_table::store_declared_variable(nyla::avariable* variable) {
-	nyla::ascope* cur_scope = m_scopes.top();
-	cur_scope->variables[variable->ident->name] = variable;
+nyla::sym_variable* nyla::sym_table::enter_variable(u32 name_key) {
+	assert(m_scope && "Cannot enter a variable into an empty scope!");
+	m_scope->variables[name_key] = new sym_variable;
+	return m_scope->variables[name_key];
 }
 
-nyla::avariable* sym_table::get_declared_variable(nyla::ascope* scope, nyla::aidentifier* identifier) {
-	nyla::ascope* scope_itr = scope;
+nyla::sym_variable* nyla::sym_table::find_variable(sym_scope* scope, u32 name_key) {
+	sym_scope* scope_itr = scope;
 	while (scope_itr != nullptr) {
-		auto it = scope_itr->variables.find(identifier->name);
+		auto it = scope_itr->variables.find(name_key);
 		if (it != scope_itr->variables.end()) {
 			return it->second;
 		}
@@ -41,20 +68,39 @@ nyla::avariable* sym_table::get_declared_variable(nyla::ascope* scope, nyla::aid
 	return nullptr;
 }
 
-bool sym_table::has_been_declared(nyla::avariable* variable) {
-	// Search through the scopes to see if it has been declared.
-	assert(!m_scopes.empty() && "Cannot check declaration without a scope");
-	nyla::ascope* scope = m_scopes.top();
-	while (scope != nullptr) {
-		if (scope->variables.find(variable->ident->name) != scope->variables.end()) {
-			return true;
-		}
-		scope = scope->parent;
+std::vector<nyla::sym_module*> nyla::sym_table::get_modules() {
+	std::vector<nyla::sym_module*> modules;
+	for (auto& pair : m_modules) {
+		modules.push_back(pair.second);
 	}
-	return false;
+	return modules;
 }
 
-void nyla::sym_table::import_dll(std::string& dll_path) {
-	m_dll_import_paths.push_back(dll_path);
+nyla::sym_scope* nyla::sym_table::push_scope() {
+	nyla::sym_scope* scope = new nyla::sym_scope;
+	if (m_scope) {
+		scope->parent = m_scope;
+	}
+	m_scope = scope;
+	return m_scope;
 }
 
+void nyla::sym_table::pop_scope() {
+	m_scope = m_scope->parent;
+}
+
+std::vector<nyla::sym_function*> nyla::sym_table::get_functions(sym_module* nmodule, u32 name_key) {
+	auto it = nmodule->functions.find(name_key);
+	if (it == nmodule->functions.end()) {
+		return {};
+	}
+	return it->second;
+}
+
+std::vector<nyla::sym_function*> nyla::sym_table::get_constructors(sym_module* nmodule) {
+	auto it = nmodule->constructors.find(nmodule->name_key);
+	if (it == nmodule->constructors.end()) {
+		return {};
+	}
+	return it->second;
+}

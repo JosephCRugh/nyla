@@ -1,64 +1,43 @@
 #include "analysis.h"
 
-#include <assert.h>
+inline u32 max(u32 a, u32 b) {
+	return a > b ? a : b;
+}
 
-using namespace nyla;
+nyla::analysis::analysis(nyla::compiler& compiler, nyla::log& log,
+	                     nyla::sym_table* sym_table, nyla::afile_unit* file_unit)
+	: m_compiler(compiler), m_log(log), m_sym_table(sym_table),
+	  m_llvm_generator(compiler, new llvm::Module("JIT module", *llvm_context), nullptr, false),
+      m_file_unit(file_unit) {
+	// TODO: clean up JIT module
+}
 
-#include <unordered_set>
-#include <unordered_map>
-
-void analysis::type_check_file_unit(nyla::afile_unit* file_unit) {
-	for (nyla::afunction* function : file_unit->functions) {
-		if (!function->is_external)
-			type_check_function(function);
+void nyla::analysis::check_file_unit() {
+	m_sym_table->m_started_analysis = true;
+	for (nyla::amodule* nmodule : m_file_unit->modules) {
+		check_module(nmodule);
 	}
 }
 
-void analysis::type_check_function(nyla::afunction* function) {
-	m_function = function;
-	m_scope = function->scope;
-	for (nyla::aexpr* expr : function->scope->stmts) {
-		type_check_expression(expr);
+void nyla::analysis::check_module(nyla::amodule* nmodule) {
+	m_sym_module = nmodule->sym_module;
+	m_sym_scope  = nmodule->sym_scope;
+	for (nyla::avariable_decl* field : nmodule->fields) {
+		check_expression(field);
 	}
-	m_scope = m_scope->parent;
-	m_function = nullptr;
+	for (nyla::afunction* function : nmodule->functions) {
+		check_function(function);
+	}
+	m_sym_scope = m_sym_scope->parent;
 }
 
-void nyla::analysis::type_check_function_call(nyla::afunction_call* function_call) {
-	nyla::afunction* called_function =
-		m_sym_table.get_declared_function(function_call->ident->name);
-	function_call->is_constexpr = false; // TODO: This should be true if the called
-	                                     // function is constexpr
-	if (called_function == nullptr) {
-		produce_error(ERR_FUNCTION_NOT_FOUND,
-			error_data::make_str_literal_load(function_call->ident->name.c_str()),
-			function_call
-		);
-		function_call->checked_type = nyla::type::get_error();
-		return;
-	}
-	function_call->called_function = called_function;
-	function_call->checked_type = called_function->return_type;
-	for (u32 i = 0; i < function_call->parameter_values.size(); i++) {
-		nyla::aexpr*& parameter_value = function_call->parameter_values[i];
-		type_check_expression(parameter_value);
-		attempt_pass_arg(parameter_value, called_function->parameters[i]->checked_type);
-	}
-}
-
-void analysis::type_check_expression(nyla::aexpr* expr) {
+void nyla::analysis::check_expression(nyla::aexpr* expr) {
 	switch (expr->tag) {
 	case AST_VARIABLE_DECL:
-		type_check_variable_decl(dynamic_cast<nyla::avariable_decl*>(expr));
+		check_variable_decl(dynamic_cast<nyla::avariable_decl*>(expr));
 		break;
 	case AST_RETURN:
-		type_check_return(dynamic_cast<nyla::areturn*>(expr));
-		break;
-	case AST_TYPE_CAST:
-		type_check_type_cast(dynamic_cast<nyla::atype_cast*>(expr));
-		break;
-	case AST_FOR_LOOP:
-		type_check_for_loop(dynamic_cast<nyla::afor_loop*>(expr));
+		check_return(dynamic_cast<nyla::areturn*>(expr));
 		break;
 	case AST_VALUE_BYTE:
 	case AST_VALUE_SHORT:
@@ -70,780 +49,980 @@ void analysis::type_check_expression(nyla::aexpr* expr) {
 	case AST_VALUE_ULONG:
 	case AST_VALUE_FLOAT:
 	case AST_VALUE_DOUBLE:
-		type_check_number(dynamic_cast<nyla::anumber*>(expr));
+	case AST_VALUE_CHAR8:
+	case AST_VALUE_CHAR16:
+	case AST_VALUE_CHAR32:
+		check_number(dynamic_cast<nyla::anumber*>(expr));
 		break;
-	case AST_ARRAY: {
-		nyla::aarray* arr = dynamic_cast<nyla::aarray*>(expr);
-		type_check_array(arr, arr->depths);
-		break;
-	}
 	case AST_VALUE_BOOL:
-		expr->checked_type = nyla::type::get_bool();
-		break;
-	case AST_VALUE_STRING:
-		expr->checked_type = nyla::type::get_string();
-		break;
-	case AST_BINARY_OP:
-		type_check_binary_op(dynamic_cast<nyla::abinary_op*>(expr));
-		break;
-	case AST_UNARY_OP:
-		type_check_unary_op(dynamic_cast<nyla::aunary_op*>(expr));
-		break;
-	case AST_FUNCTION_CALL:
-		type_check_function_call(dynamic_cast<nyla::afunction_call*>(expr));
-		break;
-	case AST_ERROR:
-		expr->checked_type = nyla::type::get_error();
-		break;
-	case AST_ARRAY_ACCESS:
-		type_check_array_access(dynamic_cast<nyla::aarray_access*>(expr));
+		expr->type = nyla::types::type_bool;
 		break;
 	case AST_VALUE_NULL:
-		expr->checked_type = nyla::type::get_null();
+		expr->type = nyla::types::type_null;
 		break;
-	case AST_VARIABLE: // Already assumed type checked from declaration
+	case AST_BINARY_OP:
+		check_binary_op(dynamic_cast<nyla::abinary_op*>(expr));
 		break;
-	case AST_IDENTIFIER:
-		type_check_identifier(dynamic_cast<nyla::aidentifier*>(expr));
+	case AST_UNARY_OP:
+		check_unary_op(dynamic_cast<nyla::aunary_op*>(expr));
+		break;
+	case AST_IDENT:
+		check_ident(m_sym_scope, dynamic_cast<nyla::aident*>(expr));
+		break;
+	case AST_FOR_LOOP:
+		check_for_loop(dynamic_cast<nyla::afor_loop*>(expr));
+		break;
+	case AST_WHILE_LOOP:
+		check_while_loop(dynamic_cast<nyla::awhile_loop*>(expr));
+		break;
+	case AST_TYPE_CAST:
+		check_type_cast(dynamic_cast<nyla::atype_cast*>(expr));
+		break;
+	case AST_STRING8:
+	case AST_STRING16:
+	case AST_STRING32:
+		expr->type = nyla::types::type_string;
+		break;
+	case AST_FUNCTION_CALL: {
+		bool static_context = true;
+		if (m_function) {
+			static_context = m_function->sym_function->mods & MOD_STATIC;
+		}
+		check_function_call(static_context, m_sym_module, dynamic_cast<nyla::afunction_call*>(expr), false);
+		break;
+	}
+	case AST_ARRAY_ACCESS:
+		check_array_access(m_sym_scope, dynamic_cast<nyla::aarray_access*>(expr));
+		break;
+	case AST_ARRAY:
+		check_array(dynamic_cast<nyla::aarray*>(expr));
+		break;
+	case AST_VAR_OBJECT:
+		check_var_object(dynamic_cast<nyla::avar_object*>(expr));
+		break;
+	case AST_DOT_OP:
+		check_dot_op(dynamic_cast<nyla::adot_op*>(expr));
+		break;
+	case AST_IF:
+		check_if(dynamic_cast<nyla::aif*>(expr));
 		break;
 	default:
-		assert(!"Failed to implement a type check");
+		assert(!"Unhandled analysis check for expression");
 		break;
 	}
 }
 
-void analysis::type_check_return(nyla::areturn* ret) {
-	if (ret->value == nullptr) {
-		// Ensuring that the return type of the function
-		// is void.
-		if (m_function->return_type->tag != TYPE_VOID) {
-			produce_error(ERR_SHOULD_RETURN_VALUE, nullptr, ret);
-		}
-	} else {
-		type_check_expression(ret->value);
-		
-
-		if (is_assignable_to(ret->value, m_function->return_type)) {
-			// TODO: need to provide better assignable functionality than
-			// just type assigning
-			ret->value->checked_type = m_function->return_type;
+void nyla::analysis::check_function(nyla::afunction* function) {
+	if (function->is_external()) return;
+	m_function = function;
+	m_sym_scope = function->sym_scope;
+	check_scope(function->stmts, function->comptime);
+	
+	if (!m_sym_scope->found_return) {
+		if (function->return_type == nyla::types::type_void) {
+			// Adding a void return
+			nyla::areturn* ret = make<nyla::areturn>(AST_RETURN, function);
+			function->stmts.push_back(ret);
 		} else {
-			produce_error(ERR_CANNOT_ASSIGN,
-				type_mismatch_data::make_type_mismatch(m_function->return_type, ret->value->checked_type),
-				ret->value);
-			ret->value->checked_type = nyla::type::get_error();
+			m_log.err(ERR_FUNCTION_EXPECTS_RETURN, function);
+		}
+	}
+	m_sym_scope = m_sym_scope->parent;
+}
+
+void nyla::analysis::check_variable_decl(nyla::avariable_decl* variable_decl) {
+	nyla::type* type = variable_decl->type;
+	nyla::type* underlying_type = type;
+	if (type->is_arr() || type->is_ptr()) {
+		underlying_type = type->get_base_type();
+	}
+
+	if (variable_decl->assignment != nullptr) {
+		check_expression(variable_decl->assignment);
+		if (!variable_decl->assignment->comptime) {
+			variable_decl->comptime = false;
+		}
+	}
+
+	if (variable_decl->type->is_arr()) {
+
+		// Computing the dimension sizes   int[n][k]
+		//                                     ^  ^
+		//                                     these
+		for (nyla::aexpr* arr_dim_size : variable_decl->sym_variable->arr_dim_sizes) {
+			if (arr_dim_size == nullptr) {
+				// TODO: probably should do more here!
+				continue;
+			}
+
+			check_expression(arr_dim_size);
+			if (arr_dim_size->type == nyla::types::type_error) {
+				variable_decl->type = nyla::types::type_error;
+				return;
+			}
+			if (!arr_dim_size->type->is_int()) {
+				variable_decl->type = nyla::types::type_error;
+				return;
+			}
+
+			// TODO: This also needs to be moved to when generating
+			// comptime code
+			// TODO: create anonymous function
+			llvm::ConstantInt* result =
+				llvm::cast<llvm::ConstantInt>(m_llvm_generator.gen_expr_rvalue(arr_dim_size));
+			s64 computed_dim_size = result->getValue().getSExtValue();
+			// TODO: make sure the value is POSITIVE
+			variable_decl->sym_variable->computed_arr_dim_sizes.push_back(computed_dim_size);
+		}
+
+		if (variable_decl->assignment != nullptr &&
+			!variable_decl->sym_variable->computed_arr_dim_sizes.empty()) {
+
+			// TODO: All of this will need to be moved to the comptime section since
+			// the computed arr size information will not be present until then
+			nyla::abinary_op* assignment = dynamic_cast<nyla::abinary_op*>(variable_decl->assignment);
+			if (assignment->rhs->tag == AST_ARRAY || assignment->rhs->type == nyla::types::type_string) {
+
+				if (assignment->rhs->tag == AST_ARRAY) {
+					nyla::aarray* arr = dynamic_cast<nyla::aarray*>(assignment->rhs);
+					compare_arr_size(arr, variable_decl->sym_variable->computed_arr_dim_sizes);
+				} else {
+					nyla::astring* str = dynamic_cast<nyla::astring*>(assignment->rhs);
+					compare_arr_size(str, variable_decl->sym_variable->computed_arr_dim_sizes);
+				}
+			}
 		}
 	}
 }
 
-void analysis::type_check_number(nyla::anumber* number) {
-	// Nothing really to do since numbers already have types assigned.
-	// Just mapping the tag to the proper type.
-	switch (number->tag) {
-	case AST_VALUE_BYTE:   number->checked_type = nyla::type::get_byte();   break;
-	case AST_VALUE_SHORT:  number->checked_type = nyla::type::get_short();  break;
-	case AST_VALUE_INT:    number->checked_type = nyla::type::get_int();    break;
-	case AST_VALUE_LONG:   number->checked_type = nyla::type::get_long();   break;
-	case AST_VALUE_UBYTE:  number->checked_type = nyla::type::get_ubyte();  break;
-	case AST_VALUE_USHORT: number->checked_type = nyla::type::get_ushort(); break;
-	case AST_VALUE_UINT:   number->checked_type = nyla::type::get_uint();   break;
-	case AST_VALUE_ULONG:  number->checked_type = nyla::type::get_ulong();  break;
-	case AST_VALUE_FLOAT:  number->checked_type = nyla::type::get_float();  break;
-	case AST_VALUE_DOUBLE: number->checked_type = nyla::type::get_double(); break;
+void nyla::analysis::check_return(nyla::areturn* ret) {
+	m_sym_scope->found_return = true;
+	if (ret->value) {
+		check_expression(ret->value);
+		if (ret->value->type == nyla::types::type_error) {
+			return;
+		}
+		if (!ret->value->comptime) {
+			ret->comptime = false;
+		}
+		if (is_assignable_to(m_function->return_type, ret->value->type)) {
+			attempt_assignment(m_function->return_type, ret->value);
+		} else {
+			m_log.err(ERR_RETURN_VALUE_NOT_COMPATIBLE_WITH_RETURN_TYPE,
+				      error_payload::types({ ret->value->type, m_function->return_type }),
+				      ret);
+		}
+	} else {
+		if (m_function->return_type != nyla::types::type_void) {
+			m_log.err(ERR_FUNCTION_EXPECTS_RETURN_VALUE, ret);
+		}
+	}
+}
 
+void nyla::analysis::check_number(nyla::anumber* number) {
+	switch (number->tag) {
+	case AST_VALUE_BYTE:   number->type = nyla::types::type_byte;   break;
+	case AST_VALUE_SHORT:  number->type = nyla::types::type_short;  break;
+	case AST_VALUE_INT:    number->type = nyla::types::type_int;    break;
+	case AST_VALUE_LONG:   number->type = nyla::types::type_long;   break;
+	case AST_VALUE_UBYTE:  number->type = nyla::types::type_ubyte;  break;
+	case AST_VALUE_USHORT: number->type = nyla::types::type_ushort; break;
+	case AST_VALUE_UINT:   number->type = nyla::types::type_uint;   break;
+	case AST_VALUE_ULONG:  number->type = nyla::types::type_ulong;  break;
+	case AST_VALUE_FLOAT:  number->type = nyla::types::type_float;  break;
+	case AST_VALUE_DOUBLE: number->type = nyla::types::type_double; break;
+	case AST_VALUE_CHAR8:  number->type = nyla::types::type_char8;  break;
+	case AST_VALUE_CHAR16: number->type = nyla::types::type_char16; break;
+	case AST_VALUE_CHAR32: number->type = nyla::types::type_char32; break;
 	default:
 		assert(!"Haven't implemented type mapping for value.");
 		break;
 	}
 }
 
-void analysis::type_check_binary_op(nyla::abinary_op* binary_op) {
+void nyla::analysis::check_binary_op(nyla::abinary_op* binary_op) {
 	
-	// Must have already been dealt with.
-	if (binary_op->lhs->tag == AST_ERROR || binary_op->rhs->tag == AST_ERROR) {
-		binary_op->checked_type = nyla::type::get_error();
+	check_expression(binary_op->lhs);
+	check_expression(binary_op->rhs);
+
+	nyla::type* lhs_type = binary_op->lhs->type;
+	nyla::type* rhs_type = binary_op->rhs->type;
+
+	if (lhs_type == nyla::types::type_error ||
+		rhs_type == nyla::types::type_error) {
+		binary_op->type = nyla::types::type_error;
 		return;
 	}
 
-	type_check_expression(binary_op->lhs);
-
-	nyla::type* lhs_checked_type = binary_op->lhs->checked_type;
-
-	if (lhs_checked_type->tag == TYPE_ERROR) {
-		binary_op->checked_type = nyla::type::get_error();
-		return;
+	if (!binary_op->lhs->comptime || !binary_op->rhs->comptime) {
+		binary_op->comptime = false;
 	}
 
-	if (binary_op->op == '.') {
-		if (binary_op->lhs->checked_type->is_arr()) {
-			// TODO: need to check lhs is a variable?
-			
-			///  Tree with dimension qualifier
-			//    . op
-			//    / \
-			//  lhs  rhs
-			//  /     \
-			// arr.length [n]
-            //  ^          ^--- Dimension
-			//  |
-			// is array -> then check dimension
-
-			if (binary_op->rhs->tag == AST_ARRAY_ACCESS) {
-				nyla::aarray_access* dimension_access =
-					dynamic_cast<nyla::aarray_access*>(binary_op->rhs);
-				nyla::aidentifier* ident = dynamic_cast<nyla::aidentifier*>(dimension_access->ident);
-
-				if (ident->name != nyla::name::make("length")) {
-					produce_error(ERR_DOT_OP_ON_ARRAY_EXPECTS_LENGTH, nullptr, binary_op);
-					binary_op->checked_type = nyla::type::get_error();
-					return;
-				}
-
-				if (dimension_access->next) {
-					produce_error(ERR_ARRAY_LENGTH_OPERATOR_EXPECTS_SINGLE_DIM, nullptr, binary_op);
-					binary_op->checked_type = nyla::type::get_error();
-					return;
-				}
-				nyla::aexpr* dimension_expr = dimension_access->index;
-				if (dimension_expr->tag != AST_VALUE_INT) {
-					produce_error(ERR_ARRAY_LENGTH_OPERATOR_EXPECTS_INT_DIM, nullptr, binary_op);
-					binary_op->checked_type = nyla::type::get_error();
-					return;
-				}
-				nyla::anumber* dimension_number = dynamic_cast<nyla::anumber*>(dimension_expr);
-				if (dimension_number->value_int > lhs_checked_type->arr_depth-1) {
-					produce_error(ERR_ARRAY_LENGTH_OPERATOR_INVALID_DIM_INDEX,
-						error_data::make_type_load(binary_op->lhs->checked_type), binary_op);
-					binary_op->checked_type = nyla::type::get_error();
-					return;
-				}
-
-				delete binary_op->rhs;
-				// TODO delete dimension_access->variable;
-				binary_op->rhs = dimension_number;
-				binary_op->op = TK_ARRAY_LENGTH;
-				binary_op->checked_type = nyla::type::get_ulong();
-			} else {
-				
-				if (binary_op->rhs->tag != AST_IDENTIFIER) {
-					produce_error(ERR_DOT_OP_ON_ARRAY_EXPECTS_LENGTH, nullptr, binary_op);
-					binary_op->checked_type = nyla::type::get_error();
-					return;
-				}
-
-				nyla::aidentifier* rhs_name = dynamic_cast<nyla::aidentifier*>(binary_op->rhs);
-				if (rhs_name->name != nyla::name::make("length")) {
-					produce_error(ERR_DOT_OP_ON_ARRAY_EXPECTS_LENGTH, nullptr, binary_op);
-					binary_op->checked_type = nyla::type::get_error();
-					return;
-				}
-
-				if (lhs_checked_type->arr_depth > 1) {
-					produce_error(ERR_ARRAY_LENGTH_NO_DIM_INDEX_FOR_MULTIDIM_ARRAY, 
-						error_data::make_type_load(binary_op->lhs->checked_type), binary_op);
-					binary_op->checked_type = nyla::type::get_error();
-					return;
-				}
-
-				// Replacing the rhs operatation with a request for the array's length
-				delete binary_op->rhs;
-				binary_op->rhs = gen_default_value(nyla::type::get_int()); // Generating value 0
-				binary_op->op = TK_ARRAY_LENGTH;
-				binary_op->checked_type = nyla::type::get_ulong();
-			}
-			return;
-		} else {
-			// TODO field access, ect..
+	switch (binary_op->op) {
+	case '=': {
+		if (!is_assignable_to(lhs_type, rhs_type)) {
+			m_log.err(ERR_CANNOT_ASSIGN,
+				      error_payload::types({ rhs_type, lhs_type }),
+				      binary_op);
 		}
+
+		attempt_assignment(lhs_type, binary_op->rhs);
+
+		binary_op->type = binary_op->lhs->type;
+		break;
 	}
-
-	type_check_expression(binary_op->rhs);
-	// TODO: this will need a number of modifications once modules
-	// added
-	nyla::type* rhs_checked_type = binary_op->rhs->checked_type;
-
-	if (rhs_checked_type->tag == TYPE_ERROR) {
-		binary_op->checked_type = nyla::type::get_error();
-		return;
-	}
-
-	if (binary_op->op == '.') {
+	case '+': case '-': case '*': case '/': {
+		if (!lhs_type->is_number()) {
+			m_log.err(ERR_OP_CANNOT_APPLY_TO,
+				      error_payload::op_cannot_apply({ binary_op->op, lhs_type }),
+				      binary_op);
+			binary_op->type = nyla::types::type_error;
+			return;
+		}
+		if (!rhs_type->is_number()) {
+			m_log.err(ERR_OP_CANNOT_APPLY_TO,
+				      error_payload::op_cannot_apply({ binary_op->op, rhs_type }),
+				      binary_op);
+			binary_op->type = nyla::types::type_error;
+			return;
+		}
 		
-	} if (only_works_on_ints(binary_op->op)) {
-		// TODO: convert to the larger integer size
-		if (!lhs_checked_type->is_int()) {
-			// TODO: produce error
-			binary_op->checked_type = nyla::type::get_error();
-			return;
+		if (lhs_type->is_int() && rhs_type->is_int()) {
+			u32 larger_mem_size = max(lhs_type->mem_size(), rhs_type->mem_size());
+			nyla::type* to_type =
+				nyla::type::get_int(larger_mem_size,
+					lhs_type->is_signed() || lhs_type->is_signed());
+			binary_op->lhs = make_cast(binary_op->lhs, to_type);
+			binary_op->rhs = make_cast(binary_op->rhs, to_type);
+			binary_op->type = to_type;
+		} else {
+			// At least one float
+			u32 larger_mem_size = max(lhs_type->mem_size(), rhs_type->mem_size());
+			nyla::type* to_type = nyla::type::get_float(larger_mem_size);
+			binary_op->lhs = make_cast(binary_op->lhs, to_type);
+			binary_op->rhs = make_cast(binary_op->rhs, to_type);
+			binary_op->type = to_type;
 		}
-		if (!lhs_checked_type->is_int()) {
-			// TODO: produce error
-			binary_op->checked_type = nyla::type::get_error();
-			return;
-		}
-	} else if (only_works_on_numbers(binary_op->op)) {
-		if (!lhs_checked_type->is_number()) {
-			produce_error(ERR_OP_CANNOT_APPLY_TO,
-				op_applies_to_data::make_applies_to(binary_op->op, binary_op->rhs->st),
+
+		break;
+	}
+	case '%': case '&': case '^': case '|':
+	case nyla::TK_LT_LT: case nyla::TK_GT_GT: {
+
+		if (!lhs_type->is_int()) {
+			m_log.err(ERR_OP_CANNOT_APPLY_TO,
+				error_payload::op_cannot_apply({ binary_op->op, lhs_type }),
 				binary_op);
-			binary_op->checked_type = nyla::type::get_error();
+			binary_op->type = nyla::types::type_error;
 			return;
 		}
-		if (!rhs_checked_type->is_number()) {
-			produce_error(ERR_OP_CANNOT_APPLY_TO,
-				op_applies_to_data::make_applies_to(binary_op->op, binary_op->rhs->st),
+		if (!rhs_type->is_int()) {
+			m_log.err(ERR_OP_CANNOT_APPLY_TO,
+				error_payload::op_cannot_apply({ binary_op->op, rhs_type }),
 				binary_op);
-			binary_op->checked_type = nyla::type::get_error();
+			binary_op->type = nyla::types::type_error;
 			return;
 		}
-		if (lhs_checked_type != rhs_checked_type) {
-			if (lhs_checked_type->is_int() && rhs_checked_type->is_int()) {
-				if (lhs_checked_type->get_mem_size() > rhs_checked_type->get_mem_size()) {
-					// Converting rhs to lhs type
-					binary_op->rhs = make_cast(binary_op->rhs, lhs_checked_type);
-					binary_op->checked_type = lhs_checked_type; // Since the lhs is prefered.
-				} else {
-					assert(lhs_checked_type->get_mem_size() < rhs_checked_type->get_mem_size());
-					// Converting lhs to rhs type
-					binary_op->lhs = make_cast(binary_op->lhs, rhs_checked_type);
-					binary_op->checked_type = rhs_checked_type; // Since the rhs is prefered.
-				}
-			} else if (lhs_checked_type->is_float() && rhs_checked_type->is_int()) {
-				binary_op->rhs = make_cast(binary_op->rhs, lhs_checked_type);
-				binary_op->checked_type = lhs_checked_type; // Since the lhs is prefered.
-			} else if (lhs_checked_type->is_int() && rhs_checked_type->is_float()) {
-				binary_op->lhs = make_cast(binary_op->lhs, rhs_checked_type);
-				binary_op->checked_type = rhs_checked_type; // Since the rhs is prefered.
-			} else if (lhs_checked_type->is_float() && rhs_checked_type->is_float()) {
-				if (lhs_checked_type->get_mem_size() > rhs_checked_type->get_mem_size()) {
-					binary_op->rhs = make_cast(binary_op->rhs, lhs_checked_type);
-					binary_op->checked_type = lhs_checked_type; // Since the lhs is prefered.
-				} else {
-					assert(lhs_checked_type->get_mem_size() < rhs_checked_type->get_mem_size());
-					binary_op->lhs = make_cast(binary_op->lhs, rhs_checked_type);
-					binary_op->checked_type = rhs_checked_type; // Since the rhs is prefered.
+
+		u32 larger_mem_size = max(lhs_type->mem_size(), rhs_type->mem_size());
+		nyla::type* to_type =
+			nyla::type::get_int(larger_mem_size,
+				lhs_type->is_signed() || lhs_type->is_signed());
+		binary_op->lhs = make_cast(binary_op->lhs, to_type);
+		binary_op->rhs = make_cast(binary_op->rhs, to_type);
+		binary_op->type = to_type;
+
+		break;
+	}
+	case '<': case '>': case TK_EQ_EQ: case TK_LT_EQ: case TK_GT_EQ: {
+		if (!lhs_type->is_number()) {
+			m_log.err(ERR_OP_CANNOT_APPLY_TO,
+				error_payload::op_cannot_apply({ binary_op->op, lhs_type }),
+				binary_op);
+			binary_op->type = nyla::types::type_error;
+			return;
+		}
+		if (!rhs_type->is_number()) {
+			m_log.err(ERR_OP_CANNOT_APPLY_TO,
+				error_payload::op_cannot_apply({ binary_op->op, rhs_type }),
+				binary_op);
+			binary_op->type = nyla::types::type_error;
+			return;
+		}
+
+		binary_op->type = nyla::types::type_bool;
+		break;
+	}
+	case TK_AMP_AMP: case TK_BAR_BAR: {
+		if (lhs_type->tag != TYPE_BOOL) {
+			m_log.err(ERR_OP_CANNOT_APPLY_TO,
+				error_payload::op_cannot_apply({ binary_op->op, lhs_type }),
+				binary_op);
+			binary_op->type = nyla::types::type_error;
+			return;
+		}
+		if (rhs_type->tag != TYPE_BOOL) {
+			m_log.err(ERR_OP_CANNOT_APPLY_TO,
+				error_payload::op_cannot_apply({ binary_op->op, rhs_type }),
+				binary_op);
+			binary_op->type = nyla::types::type_error;
+			return;
+		}
+
+		binary_op->type = nyla::types::type_bool;
+		break;
+	}
+	default: {
+		assert(!"Unimplemented binary operation!");
+		break;
+	}
+	}
+
+}
+
+void nyla::analysis::check_unary_op(nyla::aunary_op* unary_op) {
+	check_expression(unary_op->factor);
+	if (unary_op->factor->type == nyla::types::type_error) {
+		unary_op->type = nyla::types::type_error;
+		return;
+	}
+	if (!unary_op->factor->comptime) {
+		unary_op->comptime = false;
+	}
+	switch (unary_op->op) {
+	case '-': case '+': {
+		if (!unary_op->factor->type->is_number()) {
+			m_log.err(ERR_OP_CANNOT_APPLY_TO,
+				      error_payload::op_cannot_apply({ unary_op->op, unary_op->factor->type }),
+				      unary_op);
+			unary_op->type = nyla::types::type_error;
+			return;
+		}
+		unary_op->type = unary_op->factor->type;
+		break;
+	}
+	case '&': {
+		
+		if (!is_lvalue(unary_op->factor)) {
+			// TODO: produce error message
+			unary_op->type = nyla::types::type_error;
+			return;
+		}
+
+		unary_op->type = nyla::type::get_ptr(unary_op->factor->type);
+		unary_op->type->calculate_ptr_depth();
+		break;
+	}
+	case TK_PLUS_PLUS:
+	case TK_MINUS_MINUS: {
+		if (!unary_op->factor->type->is_int()) {
+			m_log.err(ERR_OP_CANNOT_APPLY_TO,
+				      error_payload::op_cannot_apply({ unary_op->op, unary_op->factor->type }),
+				      unary_op);
+			unary_op->type = nyla::types::type_error;
+			return;
+		}
+		unary_op->type = unary_op->factor->type;
+		break;
+	}
+	case '!': {
+		if (unary_op->factor->type != nyla::types::type_bool) {
+			// TODO; report error!
+			unary_op->type = nyla::types::type_error;
+			return;
+		}
+		unary_op->type = nyla::types::type_bool;
+		break;
+	}
+	default:
+		assert(!"Handled unary check!");
+		break;
+	}
+}
+
+void nyla::analysis::check_ident(sym_scope* lookup_scope, nyla::aident* ident) {
+	// Assumed a variable at this point
+	ident->sym_variable = m_sym_table->find_variable(lookup_scope, ident->ident_key);
+	if (ident->sym_variable) {
+		if (ident->spos < ident->sym_variable->position_declared_at) {
+			m_log.err(ERR_USE_OF_VARIABLE_BEFORE_DECLARATION,
+				      error_payload::word(ident->ident_key),
+				      ident);
+		}
+		ident->type = ident->sym_variable->type;
+	} else {
+		m_log.err(ERR_UNDECLARED_VARIABLE,
+			      error_payload::word(ident->ident_key),
+			      ident);
+		ident->type = nyla::types::type_error;
+	}
+}
+
+void nyla::analysis::check_for_loop(nyla::afor_loop* for_loop) {
+	m_sym_scope = for_loop->sym_scope;
+	for (nyla::avariable_decl* var_decl : for_loop->declarations) {
+		check_expression(var_decl);
+		if (var_decl->type == nyla::types::type_error) return;
+		if (!var_decl->comptime) {
+			for_loop->comptime = false;
+		}
+	}
+	check_loop(dynamic_cast<nyla::aloop_expr*>(for_loop));
+	m_sym_scope = m_sym_scope->parent;
+}
+
+void nyla::analysis::check_while_loop(nyla::awhile_loop* while_loop) {
+	m_sym_scope = while_loop->sym_scope;
+	check_loop(dynamic_cast<nyla::aloop_expr*>(while_loop));
+	m_sym_scope = m_sym_scope->parent;
+}
+
+void nyla::analysis::check_loop(nyla::aloop_expr* loop) {
+	check_expression(loop->cond);
+	if (loop->cond->type == nyla::types::type_error) return;
+	if (!loop->cond->comptime) {
+		loop->comptime = false;
+	}
+	if (loop->cond->type != nyla::types::type_bool) {
+		m_log.err(ERR_EXPECTED_BOOL_COND, loop->cond);
+	}
+	check_scope(loop->body, loop->comptime);
+	for (nyla::aexpr* expr : loop->post_exprs) {
+		check_expression(expr);
+		if (!expr->comptime) loop->comptime = false;
+	}
+}
+
+void nyla::analysis::check_type_cast(nyla::atype_cast* type_cast) {
+	// TODO: ensure it is a valid cast
+	check_expression(type_cast->value);
+	if (!type_cast->comptime) type_cast->comptime = false;
+}
+
+void nyla::analysis::check_function_call(bool static_call,
+	                                     sym_module* lookup_module,
+	                                     nyla::afunction_call* function_call,
+	                                     bool is_constructor) {
+	// Checking types of arguments
+	for (nyla::aexpr* argument : function_call->arguments) {
+		check_expression(argument);
+		if (argument->type == nyla::types::type_error) {
+			function_call->type = nyla::types::type_error;
+			return;
+		}
+		if (!argument->comptime) function_call->comptime = false;
+	}
+
+	// TODO: If the function being called has a comptime modifier
+	// then the function_call should be allowed to also be comptime
+	function_call->comptime = false;
+
+	std::vector<sym_function*> canidates;
+	if (is_constructor) {
+		canidates = m_sym_table->get_constructors(lookup_module);
+	} else {
+		canidates = m_sym_table->get_functions(lookup_module, function_call->name_key);;
+	}
+
+	nyla::sym_function* matched_function = find_best_canidate(canidates, function_call, is_constructor);
+
+	if (matched_function == nullptr) {
+		if (is_constructor) {
+			m_log.err(ERR_COULD_NOT_FIND_CONSTRUCTOR,
+				error_payload::function_call(function_call), function_call);
+		} else {
+			m_log.err(ERR_COULD_NOT_FIND_FUNCTION,
+				error_payload::function_call(function_call), function_call);
+		}
+		function_call->type = nyla::types::type_error;
+		return;
+	}
+
+	if (static_call) {
+		if (matched_function->is_member_function()) {
+			m_log.err(ERR_CALLED_NON_STATIC_FUNC_FROM_STATIC, function_call);
+		}
+	}
+
+	// TODO: make sure the user has the right access modifiers to
+	// make the call
+	switch (matched_function->mods & nyla::ACCESS_MODS) {
+	case MOD_PUBLIC:    break;
+	case MOD_PROTECTED: break;
+	case MOD_PRIVATE:   break;
+	default:            break;
+	}
+
+	check_function_call(matched_function, function_call);
+}
+
+nyla::sym_function* nyla::analysis::find_best_canidate(const std::vector<sym_function*>& canidates,
+	                                                   nyla::afunction_call* function_call,
+	                                                   bool is_constructor) {
+
+	u32 least_conflicts = 214124124;
+	s32 current_selection = -1;
+
+	for (u32 i = 0; i < canidates.size(); i++) {
+		const sym_function* canidate = canidates[i];
+		// Making sure the function actually qualifies as a
+		// canidate
+		if (canidate->name_key != function_call->name_key) continue;
+		if (canidate->param_types.size() != function_call->arguments.size()) continue;
+		bool arguments_assignable = true;
+
+		for (u32 j = 0; j < function_call->arguments.size(); j++) {
+			if (!is_assignable_to(canidate->param_types[j], function_call->arguments[j]->type)) {
+				arguments_assignable = false;
+				break;
+			}
+		}
+		if (!arguments_assignable) continue;
+
+		u32 num_conflicts = 0;
+		for (u32 j = 0; j < function_call->arguments.size(); j++) {
+			if (function_call->arguments[j]->type != canidate->param_types[j]) {
+				++num_conflicts;
+			}
+		}
+
+		if (num_conflicts < least_conflicts) {
+			least_conflicts = num_conflicts;
+			current_selection = i;
+		}
+	}
+	if (current_selection == -1) {
+		return nullptr;
+	}
+	return canidates[current_selection];
+}
+
+void nyla::analysis::check_function_call(sym_function* called_function,
+	                                     nyla::afunction_call* function_call) {
+	
+	function_call->type = called_function->return_type;
+	function_call->called_function = called_function;
+
+	for (u32 i = 0; i < called_function->param_types.size(); i++) {
+		attempt_assignment(called_function->param_types[i], function_call->arguments[i]);
+	}
+}
+
+void nyla::analysis::check_array_access(sym_scope* lookup_scope, nyla::aarray_access* array_access) {
+	check_ident(lookup_scope, array_access->ident);
+	if (array_access->ident->type == nyla::types::type_error) {
+		array_access->type = nyla::types::type_error;
+		return;
+	}
+
+	if (!array_access->ident->comptime) {
+		array_access->comptime = false;
+	}
+
+	nyla::type* type_at_index = array_access->ident->type;
+	for (nyla::aexpr* index : array_access->indexes) {
+		check_expression(index);
+		if (index->type == nyla::types::type_error) {
+			array_access->type = nyla::types::type_error;
+			return;
+		}
+		if (!index->type->is_int()) {
+			m_log.err(ERR_ARRAY_ACCESS_EXPECTS_INT, index);
+			array_access->type = nyla::types::type_error;
+			return;
+		}
+
+		if (!(type_at_index->is_arr() || type_at_index->is_ptr())) {
+			// TODO: pass over type info
+			m_log.err(ERR_ARRAY_ACCESS_ON_INVALID_TYPE, array_access);
+			array_access->type = nyla::types::type_error;
+			return;
+		}
+
+		if (!index->comptime) array_access->comptime = false;
+
+		type_at_index = type_at_index->element_type;
+	}
+	if (array_access->indexes.size() >
+		array_access->ident->type->arr_depth + array_access->ident->type->ptr_depth) {
+		m_log.err(ERR_TOO_MANY_ARRAY_ACCESS_INDEXES, array_access);
+		array_access->type = nyla::types::type_error;
+		return;
+	}
+
+	if (array_access->indexes.size() == array_access->ident->type->arr_depth) {
+		array_access->type = array_access->ident->type->get_base_type();
+	} else {
+		array_access->type = array_access->ident->type->get_sub_array(array_access->indexes.size());
+	}
+}
+
+void nyla::analysis::check_array(nyla::aarray* arr, u32 depth) {
+	if (arr->type == nyla::types::type_error) return;
+
+	bool        last_nesting_level = false;
+	nyla::type* element_array_type = nullptr;
+	for (nyla::aexpr* element : arr->elements) {
+		if (element->tag == AST_ARRAY) {
+			check_array(dynamic_cast<nyla::aarray*>(element), depth + 1);
+			element_array_type = element->type;
+		} else {
+			last_nesting_level = true;
+			check_expression(element);
+		}
+
+		if (element->type == nyla::types::type_error) {
+			arr->type = nyla::types::type_error;
+			return;
+		}
+
+		if (!element->comptime) arr->comptime = false;
+	}
+
+	if (last_nesting_level) {
+		arr->type = nyla::type::get_arr(nyla::types::type_mixed);
+	} else {
+		arr->type = nyla::type::get_arr(element_array_type);
+	}
+}
+
+void nyla::analysis::check_var_object(nyla::avar_object* var_object) {
+	nyla::afunction_call* constructor_call = var_object->constructor_call;
+	
+	u32 module_name_key = var_object->constructor_call->name_key;
+	sym_module* sym_module = m_file_unit->find_module(module_name_key);
+
+	if (!sym_module) {
+		m_log.err(ERR_COULD_NOT_FIND_MODULE_TYPE, var_object->constructor_call);
+		var_object->type = nyla::types::type_error;
+		return;
+	}
+
+	var_object->sym_module = sym_module;
+
+	if (sym_module->no_constructors_found && constructor_call->arguments.empty()) {
+		// Assumed there is a default constructor
+		var_object->assumed_default_constructor = true;
+		var_object->type = nyla::type::get_or_enter_module(sym_module);
+	} else {
+		check_function_call(false, sym_module, constructor_call, true);
+		if (constructor_call->type == nyla::types::type_error) {
+			var_object->type = nyla::types::type_error;
+			return;
+		}
+		if (!constructor_call->comptime) var_object->comptime = false;
+		var_object->type = nyla::type::get_or_enter_module(sym_module);
+	}
+}
+
+void nyla::analysis::check_dot_op(nyla::adot_op* dot_op) {
+
+	// TODO comptime checking
+
+#define LAST idx+1 == dot_op->factor_list.size()
+
+	sym_scope*  ref_scope  = m_sym_scope;
+	sym_module* ref_module = m_sym_module;
+	bool static_context = true;
+	for (u32 idx = 0; idx < dot_op->factor_list.size(); idx++) {
+		nyla::aexpr*  factor = dot_op->factor_list[idx];
+		u32 factor_name_key;
+
+		switch (factor->tag) {
+		case AST_IDENT: {
+			nyla::aident* ident = dynamic_cast<nyla::aident*>(factor);
+			
+			// Possible for the variable to be referencing a static
+			// module but only if it is the first factor and there
+			// does not already exist a variable by the name
+			if (idx == 0) {
+				// TODO: This does cause duplicate variable searches
+				// (Although only on first search)
+				sym_variable* sym_variable = m_sym_table->find_variable(m_sym_scope, ident->ident_key);
+				if (!sym_variable) {
+					sym_module* sym_module = m_file_unit->find_module(ident->ident_key);
+					if (sym_module) {
+						// References a static module
+						ref_scope  = sym_module->scope;
+						ref_module = sym_module;
+						ident->references_module = true;
+						continue; // Continuing to the next factor
+					}
 				}
 			}
-		} else {
-			binary_op->checked_type = lhs_checked_type;
+
+			check_ident(ref_scope, ident);
+			factor_name_key = ident->ident_key;
+
+			break;
 		}
-	} else if (binary_op->op == '=') {
-		// to  = from
-		// lhs = rhs
-		if (!is_assignable_to(binary_op->rhs, lhs_checked_type)) {
-			produce_error(ERR_CANNOT_ASSIGN,
-				type_mismatch_data::make_type_mismatch(lhs_checked_type, rhs_checked_type),
-				binary_op);
-			binary_op->checked_type = nyla::type::get_error();
+		case AST_ARRAY_ACCESS: {
+			nyla::aarray_access* array_access = dynamic_cast<nyla::aarray_access*>(factor);
+			check_array_access(ref_scope, array_access);
+			factor_name_key = array_access->ident->ident_key;
+			break;
+		}
+		case AST_FUNCTION_CALL: {
+			nyla::afunction_call* function_call = dynamic_cast<nyla::afunction_call*>(factor);
+			check_function_call(static_context, ref_module, function_call, false);
+			factor_name_key = function_call->name_key;
+			break;
+		}
+		default: {
+			m_log.err(ERR_DOT_OP_EXPECTS_VARIABLE, factor);
+			dot_op->type = nyla::types::type_error;
 			return;
 		}
-		if (!attempt_assign(binary_op->lhs, binary_op->rhs)) {
-			binary_op->checked_type = nyla::type::get_error();
+		}
+
+		if (factor->type == nyla::types::type_error) {
+			dot_op->type = nyla::types::type_error;
 			return;
 		}
-		binary_op->checked_type = binary_op->lhs->checked_type;
-	}
 
-	// If it is a comparison operator it
-	// gets auto converted into a bool type.
-	if (is_comp_op(binary_op->op)) {
-		binary_op->checked_type = nyla::type::get_bool();
-	}
-	if (!binary_op->lhs->is_constexpr || !binary_op->rhs->is_constexpr) {
-		binary_op->is_constexpr = false;
-	}
-}
+		if (!LAST) {
+			if (factor->type->is_arr()) {
+				// The only valid case is that the next
+				// factor in the list is a length identifier
+				nyla::aexpr* next_factor = dot_op->factor_list[idx + 1];
+				bool is_dot_length = true;
+				if (idx + 2 != dot_op->factor_list.size() || next_factor->tag != AST_IDENT) {
+					is_dot_length = false;
+				}
+				if (is_dot_length) {
+					nyla::aident* next_ident = dynamic_cast<nyla::aident*>(next_factor);
+					if (next_ident->ident_key == nyla::length_ident) {
+						next_ident->is_array_length = true;
+						dot_op->type = nyla::types::type_uint; // Lengths are in uint
+						return;
+					} else {
+						is_dot_length = false;
+					}
+				}
+				if (!is_dot_length) {
+					m_log.err(ERR_TYPE_DOES_NOT_HAVE_FIELD,
+						      error_payload::word({ factor_name_key }),
+						      factor);
+					dot_op->type = nyla::types::type_error;
+					return;
+				}
 
-void analysis::type_check_unary_op(nyla::aunary_op* unary_op) {
-	type_check_expression(unary_op->factor);
-
-	if (unary_op->factor->checked_type->tag == TYPE_ERROR) {
-		unary_op->checked_type = nyla::type::get_error();
-		return;
-	}
-
-	if (only_works_on_numbers(unary_op->op)) {
-		if (!unary_op->factor->checked_type->is_number()) {
-			produce_error(ERR_OP_CANNOT_APPLY_TO,
-				op_applies_to_data::make_applies_to(unary_op->op, unary_op->factor->st),
-				unary_op);
-			unary_op->checked_type = nyla::type::get_error();
-			return;
-		}
-		unary_op->checked_type = unary_op->factor->checked_type;
-	}
-}
-
-void analysis::type_check_variable_decl(nyla::avariable_decl* variable_decl) {
-	type_check_type(variable_decl->variable->checked_type);
-	if (variable_decl->assignment != nullptr) {
-		type_check_expression(variable_decl->assignment);
-	}
-}
-
-void analysis::type_check_type_cast(nyla::atype_cast* type_cast) {
-	type_check_expression(type_cast->value);
-}
-
-void analysis::type_check_identifier(nyla::aidentifier* identifier) {
-	
-	// Since the variable was declared previously we simple look up
-	// it's type.
-	nyla::avariable* declared_variable = m_sym_table.get_declared_variable(m_scope, identifier);
-
-	if (declared_variable == nullptr) {
-		produce_error(ERR_UNDECLARED_VARIABLE,
-			error_data::make_str_literal_load(identifier->name.c_str()),
-			identifier);
-		identifier->checked_type = nyla::type::get_error();
-		return;
-	}
-
-	// Making sure the variable was declared before it was used.
-	if (declared_variable->st->spos > identifier->st->spos) {
-		produce_error(ERR_USE_BEFORE_DECLARED_VARIABLE,
-			error_data::make_str_literal_load(identifier->name.c_str()),
-			identifier);
-		identifier->checked_type = nyla::type::get_error();
-		return;
-	}
-
-	identifier->checked_type = declared_variable->checked_type;
-	identifier->variable = declared_variable;
-}
-
-void nyla::analysis::type_check_for_loop(nyla::afor_loop* for_loop) {
-	m_scope = for_loop->scope;
-	for (nyla::avariable_decl* var_decl : for_loop->declarations) {
-		type_check_expression(var_decl);
-	}
-	type_check_expression(for_loop->cond);
-	if (for_loop->cond->checked_type->tag != TYPE_BOOL) {
-		if (for_loop->cond->checked_type->tag != TYPE_ERROR) {
-			produce_error(ERR_EXPECTED_BOOL_COND, nullptr, for_loop->cond);
-		}
-	}
-	for (nyla::aexpr* expr : for_loop->scope->stmts) {
-		type_check_expression(expr);
-	}
-	m_scope = m_scope->parent;
-}
-
-void analysis::type_check_type(nyla::type* type) {
-	// TODO: if the type is undetermined then it needs to now
-	// be determined here.
-	if (type->is_arr()) {
-		// Possible that no number exist between []
-		if (type->dim_size != nullptr) {
-			type_check_expression(type->dim_size);
-			if (!type->dim_size->checked_type->is_int()) {
-				produce_error(ERR_ARRAY_SIZE_EXPECTS_INT,
-					error_data::make_type_load(type),
-					type->dim_size);
+			} else if (factor->type->is_module()) {
+				// TODO: could also be a pointer to a module
+				// 
+				static_context = false;
+				ref_module = factor->type->sym_module;
+				ref_scope  = factor->type->sym_module->scope;
+			} else {
+				m_log.err(ERR_TYPE_DOES_NOT_HAVE_FIELD,
+					      error_payload::word({ factor_name_key }),
+					      factor);
+				dot_op->type = nyla::types::type_error;
 				return;
 			}
-		}
-		
-		type_check_type(type->elem_type);
-	}
-}
-
-void analysis::type_check_array(nyla::aarray* arr, const std::vector<u64>& depths, u32 depth) {
-	if (arr->checked_type == nyla::type::get_error()) {
-		return;
-	}
-	
-	for (nyla::aexpr* element : arr->elements) {
-		if (element->tag == AST_ARRAY) {
-			type_check_array(dynamic_cast<nyla::aarray*>(element), depths, depth + 1);
 		} else {
-			type_check_expression(element);
+			// Is last so it takes on the type of the last factor
+			dot_op->type = factor->type;
 		}
 	}
-
-	nyla::anumber* processed_dim_size =
-		nyla::make_node<nyla::anumber>(AST_VALUE_ULONG, arr->st, arr->st);
-	processed_dim_size->value_ulong = depths[depth];
-	processed_dim_size->checked_type = nyla::type::get_ulong();
-
-	nyla::type* fst_arr_type = nyla::type::get_arr(nullptr, processed_dim_size);
-	nyla::type* cur_arr_type = fst_arr_type;
-	for (u32 i = 1; i < depths.size(); i++) {
-		processed_dim_size =
-			nyla::make_node<nyla::anumber>(AST_VALUE_ULONG, arr->st, arr->st);
-		processed_dim_size->value_ulong = depths[i];
-		processed_dim_size->checked_type = nyla::type::get_ulong();
-
-		nyla::type* arr_type = nyla::type::get_arr(nullptr, processed_dim_size);
-		cur_arr_type->elem_type = arr_type;
-		cur_arr_type = arr_type;
-	}
-	cur_arr_type->elem_type = nyla::type::get_mixed();
-
-	arr->checked_type = fst_arr_type;
-	arr->checked_type->calculate_arr_depth();
-
+#undef LAST
 }
 
-void analysis::type_check_array_access(nyla::aarray_access* array_access, u32 depth) {
-	type_check_expression(array_access->index);
-	array_access->index = make_cast(array_access->index, nyla::type::get_ulong());
-
-	if (array_access->next) {
-		type_check_array_access(dynamic_cast<nyla::aarray_access*>(array_access->next), depth + 1);
-		if (array_access->next->checked_type->tag == TYPE_ERROR) {
-			array_access->checked_type = nyla::type::get_error();
-			return;
-		}
-		array_access->checked_type = array_access->next->checked_type;
-		array_access->ident = array_access->next->ident;
-	} else {
-		type_check_identifier(dynamic_cast<nyla::aidentifier*>(array_access->ident));
-		if (array_access->ident->checked_type->tag == TYPE_ERROR) {
-			array_access->checked_type = nyla::type::get_error();
-			return;
-		}
-		array_access->checked_type = array_access->ident
-			                                     ->checked_type
-			                                     ->get_array_at_depth(depth + 1);
-	}
+void nyla::analysis::check_if(nyla::aif* ifstmt) {
 	
-}
+	bool all_if_scopes_return = true;
+	bool comptime = true;
+	nyla::aif* cur_if = ifstmt;
+	while (cur_if) {
 
-void analysis::flatten_array(nyla::type* assign_type, std::vector<u64> depths,
-	                         nyla::aarray* arr, nyla::aarray*& out_arr, u32 depth) {
-	bool at_bottom = false;
-	u64 processed = 0;
-	for (nyla::aexpr* element : arr->elements) {
-		if (element->tag == AST_ARRAY) {
-			nyla::aarray* inner_arr = dynamic_cast<nyla::aarray*>(element);
-			flatten_array(assign_type, depths, inner_arr, out_arr, depth + 1);
-			delete inner_arr;
+		check_expression(cur_if->cond);
+		if (cur_if->cond->type == nyla::types::type_error) return;
+		if (cur_if->cond->type != nyla::types::type_bool) {
+			m_log.err(ERR_EXPECTED_BOOL_COND, cur_if->cond);
+		}
+		if (!cur_if->cond->comptime) comptime = false;
+
+		m_sym_scope = cur_if->sym_scope;
+		check_scope(cur_if->body, ifstmt->comptime);
+		if (!m_sym_scope->found_return) {
+			all_if_scopes_return = false;
+		}
+		m_sym_scope = m_sym_scope->parent;
+
+		if (cur_if->else_sym_scope) {
+			m_sym_scope = cur_if->else_sym_scope;
+			check_scope(cur_if->else_body, ifstmt->comptime);
+			if (!m_sym_scope->found_return) {
+				all_if_scopes_return = false;
+			}
+			m_sym_scope = m_sym_scope->parent;
 		} else {
-			at_bottom = true;
-			type_check_expression(element);
-			out_arr->elements.push_back(element);
+			all_if_scopes_return = false;
 		}
-		++processed;
+
+		cur_if = cur_if->else_if;
 	}
-	if (at_bottom) {
-		u64 amount_at_bottom = depths[depth];
-		for (u64 i = processed; i < amount_at_bottom; i++) {
-			out_arr->elements.push_back(gen_default_value(assign_type));
-		}
-	} else {
-		
-		// Filling algorithm
-		// [i][j][k]
-		//	^  ^  k-processed
-		//	|  |
-		//	|  k
-		// i*k
+	if (!comptime) {
+		ifstmt->comptime = false;
+	}
 
-		u64 amount_at_depth = depths[depth];
-
-		u64 amount_to_fill = depths[depths.size() - 1];
-		for (u32 i = depths.size() - 2; i > depth; i--) {
-			amount_to_fill *= depths[i];
-		}
-		for (u64 i = processed; i < amount_at_depth; i++) {
-			for (u64 j = 0; j < amount_to_fill; j++) {
-				out_arr->elements.push_back(gen_default_value(assign_type));
-			}
-		}
+	if (all_if_scopes_return) {
+		m_sym_scope->found_return = true;
 	}
 }
 
-bool analysis::is_assignable_to(nyla::aexpr* from, nyla::type* to) {
-	if (from->checked_type->tag == TYPE_ERROR || to->tag == TYPE_ERROR) {
-		return true; // Assumed that the error for this has already been handled
-	}
- 
-	if (from->checked_type->tag == TYPE_STRING) {
-		switch (to->tag) {
-		case TYPE_PTR: {
-			if (to->get_ptr_base_type()->tag == TYPE_CHAR16) {
-				return to->ptr_depth == 1;
-			}
-			return false;
-		}
-		case TYPE_ARR: {
-			if (to->get_array_base_type()->tag == TYPE_CHAR16) {
-				return to->arr_depth == 1;
-			}
-			return false;
-		}
-		default:
-			return false;
-		}
-	} else if (from->checked_type->is_arr()) {
-		return to->is_arr() || to->is_ptr();
-	} else if (from->checked_type->tag == TYPE_NULL) {
-		return to->is_ptr();
-	} else {
-		return *from->checked_type == *to; // TODO: probably too strict
-	}
-}
-
-bool nyla::analysis::attempt_assign(nyla::aexpr*& lhs, nyla::aexpr*& rhs) {
-
-	nyla::type* lhs_type = lhs->checked_type;
-	nyla::type* rhs_type = rhs->checked_type;
-	if (lhs->checked_type->tag == TYPE_ERROR) return true;
-	if (rhs->checked_type->tag == TYPE_ERROR) return true;
-
-	// lhs       = rhs
-	// int[][] a = { {1, 2}, {7, 8} }
-
-	if (rhs_type->tag == TYPE_STRING) {
-		nyla::astring* str = dynamic_cast<nyla::astring*>(rhs);
-		switch (lhs_type->tag) {
-		case TYPE_ARR: {
-
-			nyla::type* arr_type = lhs->checked_type;
-			while (arr_type->tag == TYPE_ARR) {
-				if (arr_type->dim_size != nullptr) {
-					produce_error(ERR_ARRAY_SIZE_SHOULD_BE_IMPLICIT, nullptr, lhs);
-					return false;
-				}
-				arr_type = arr_type->elem_type;
-			}
-
-			if (lhs_type->get_array_base_type()->tag == TYPE_CHAR16) {
-
-				nyla::aarray* str_as_arr =
-					make_node<nyla::aarray>(AST_ARRAY, rhs->st, rhs->et);
-				str_as_arr->depths.push_back(str->lit.length());
-				for (c8& ch : str->lit) {
-					nyla::anumber* expr_ch =
-						make_node<nyla::anumber>(AST_VALUE_SHORT, rhs->st, rhs->et);
-					expr_ch->checked_type = nyla::type::get_char16();
-					expr_ch->value_int = ch & 0xFF;
-					str_as_arr->elements.push_back(expr_ch);
-				}
-
-				nyla::anumber* dim_size = make_node<nyla::anumber>(AST_VALUE_ULONG,
-					lhs->st, lhs->et);
-				dim_size->value_ulong = str->lit.length();
-				dim_size->checked_type = nyla::type::get_ulong();
-				str_as_arr->checked_type = nyla::type::get_arr(
-					nyla::type::get_char16(), dim_size);
-				str_as_arr->checked_type->calculate_arr_depth();
-
-				delete rhs;
-				rhs = str_as_arr;
-
-				lhs->checked_type = rhs->checked_type;
-				get_variable(lhs)->checked_type = lhs->checked_type;
-			}
+void nyla::analysis::check_scope(const std::vector<nyla::aexpr*>& stmts, bool& comptime) {
+	
+	for (nyla::aexpr* stmt : stmts) {
+		if (m_sym_scope->found_return) {
+			// TODO: may need to mark the rest of the statements with nyla::types::type_error
+			m_log.err(ERR_STMTS_AFTER_RETURN, stmt);
 			break;
 		}
-		case TYPE_PTR: {
-			// TODO
-			break;
+		check_expression(stmt);
+		if (!stmt->comptime) {
+			comptime = false;
 		}
-		}
+	}
+}
 
-	} else if (rhs->tag == AST_ARRAY) {
-		
-		if (rhs_type->arr_depth != lhs_type->arr_depth) {
-			produce_error(ERR_DIMENSIONS_OF_ARRAYS_MISMATCH,
-				type_mismatch_data::make_type_mismatch(lhs_type, rhs_type), rhs);
+/*
+ * Utilities
+ */
+
+bool nyla::analysis::is_assignable_to(nyla::type* to, nyla::type* from) {
+	// TODO: arrays need to have the elements checked!
+
+	switch (to->tag) {
+		// is_int()
+	case TYPE_BYTE:
+	case TYPE_SHORT:
+	case TYPE_INT:
+	case TYPE_LONG:
+	case TYPE_UBYTE:
+	case TYPE_USHORT:
+	case TYPE_UINT:
+	case TYPE_ULONG:
+	case TYPE_CHAR8:
+	case TYPE_CHAR16:
+	case TYPE_CHAR32: {
+		if (from->is_int()) {  // int & int
+			return to->mem_size() >= from->mem_size();
+		}
+		return false;
+	}
+	case TYPE_FLOAT:
+	case TYPE_DOUBLE: {
+		if (from->is_float()) {  // float & float
+			return to->mem_size() >= from->mem_size();
+		} else if (from->is_int()) {
+			return true; // Can always assign integers to floats
+		}
+		return false;
+	}
+	case TYPE_BOOL: {
+		return from->tag == TYPE_BOOL;
+	}
+	case TYPE_PTR: {
+		if (from->is_ptr()) {  // ptr & ptr
+			return to->ptr_depth == from->ptr_depth &&
+				to->get_base_type() == from->get_base_type();
+		} else if (from == nyla::types::type_null) { // ptr & null
+			return true; // Pointers are always assignable null
+		} else if (from->is_arr()) { // ptr & arr
+			return to->ptr_depth == from->arr_depth &&
+				to->get_base_type() == from->get_base_type();
+		} else if (from == nyla::types::type_string) { // ptr & string
+			return to->ptr_depth == 1
+				&& to->get_base_type()->is_char();
+		}
+		return false;
+	}
+	case TYPE_ARR: {
+		if (from->is_arr()) { // arr & arr
+			return to->arr_depth == from->arr_depth &&
+				(from->get_base_type()->tag == TYPE_MIXED ||
+					to->get_base_type() == from->get_base_type());
+
+		} else if (from == nyla::types::type_string) {
+			return to->arr_depth == 1
+				&& to->get_base_type()->is_char();
+		}
+		return false;
+	}
+	case TYPE_MODULE: {
+		if (!from->is_module()) { // TODO: allow for implicit initialization!
 			return false;
 		}
-
-		nyla::type* arr_type = lhs->checked_type;
-		while (arr_type->tag == TYPE_ARR) {
-			if (arr_type->dim_size != nullptr) {
-				produce_error(ERR_ARRAY_SIZE_SHOULD_BE_IMPLICIT, nullptr, lhs);
-				return false;
-			}
-			arr_type = arr_type->elem_type;
-		}
-
-		// Here I would flatten the array and assign default
-		// values to fill empty space in the array
-		nyla::aarray* arr = dynamic_cast<nyla::aarray*>(rhs);
-
-		nyla::aarray* flattened_arr = make_node<nyla::aarray>(AST_ARRAY, arr->st, arr->et);
-		u64 flattened_size = arr->depths[0];
-		for (u32 i = 1; i < arr->depths.size(); i++) {
-			flattened_size *= arr->depths[i];
-		}
-
-		flattened_arr->elements.reserve(flattened_size);
-		flatten_array(lhs->checked_type->get_array_base_type(), arr->depths, arr, flattened_arr);
-		flattened_arr->checked_type = rhs->checked_type;
-		flattened_arr->checked_type->set_array_base_type(lhs->checked_type->get_array_base_type());
-
-		delete rhs; // Deleting the rhs and replacing it with a flattened version of the
-		            // array
-		rhs = flattened_arr;
-		lhs->checked_type = rhs->checked_type;
-		get_variable(lhs)->checked_type = lhs->checked_type;
-
-		// Making sure the elements are compatible
-		for (nyla::aexpr* element : flattened_arr->elements) {
-			if (!is_assignable_to(element, lhs_type->get_array_base_type())) {
-				produce_error(ERR_ELEMENT_OF_ARRAY_NOT_COMPATIBLE_WITH_ARRAY,
-					type_mismatch_data::make_type_mismatch(lhs_type->get_array_base_type(), element->checked_type), element);
-				return false;
-			}
-		}
-
-	} else if (rhs_type->tag == TYPE_NULL) {
-		// Converting RHS into numberic value of zero for the pointer
-		delete rhs;
-		rhs = make_cast(gen_default_value(nyla::type::get_int()), lhs->checked_type);
-	} else if (rhs_type->is_arr()) {
-		if (lhs_type->is_ptr()) {
-			// T[] b;
-			// T* ptr a = b;
-			rhs->checked_type = lhs->checked_type;
-		} else {
-			nyla::avariable* variable     = get_variable(lhs);
-			variable->arr_alloc_reference = get_variable(rhs);
-			lhs->checked_type = rhs->checked_type;
-		}
-	} else {
-		lhs->checked_type = rhs->checked_type;
+		// TODO: need to check for inheritence cases
+		return to->unique_module_key == from->unique_module_key;
 	}
-}
-
-bool analysis::attempt_pass_arg(nyla::aexpr*& argument, nyla::type* param_type) {
-	if (argument->tag == AST_VALUE_NULL) { // null to zero value
-		delete argument;
-		argument = make_cast(gen_default_value(nyla::type::get_int()), param_type);
-	}
-	return true;
-}
-
-bool analysis::only_works_on_ints(u32 op) {
-	switch (op) {
 	default:
+		assert(!"Unhandled case!");
 		return false;
 	}
 }
 
-bool analysis::only_works_on_numbers(u32 op) {
-	switch (op) {
-	case '+': case '-': case '*': case '/':
-	case '<': case '>':
-		return true;
-	default:
-		return false;
+nyla::aexpr* nyla::analysis::make_cast(nyla::aexpr* value, nyla::type* to_type) {
+	if (value->type->equals(to_type)) {
+		return value;
 	}
-}
-
-bool analysis::is_comp_op(u32 op) {
-	switch (op) {
-	case '<': case '>':
-		return true;
-	default:
-		return false;
-	}
-}
-
-nyla::atype_cast* analysis::make_cast(nyla::aexpr* value, nyla::type* cast_to_type) {
-	nyla::atype_cast* type_cast =
-		nyla::make_node<nyla::atype_cast>(AST_TYPE_CAST, value->st, value->et);
-	type_cast->value        = value;
-	type_cast->checked_type = cast_to_type;
+	nyla::atype_cast* type_cast = make<nyla::atype_cast>(AST_TYPE_CAST, value);
+	type_cast->value = value;
+	type_cast->type = to_type;
+	type_cast->comptime = value->comptime;
 	return type_cast;
 }
 
-void analysis::produce_error(error_tag tag, error_data* data,
-	                         nyla::ast_node* node) {
-	m_log.error(tag, data, node->st, node->et);
+void nyla::analysis::attempt_assignment(nyla::type* to_type, nyla::aexpr*& value) {
+	nyla::type* value_type = value->type;
+	
+	if (value_type == nyla::types::type_string) {
+		// Strings become the type they are being set to
+		value->type = to_type;
+	} else if (value_type->is_arr()) {
+		value->type->set_base_type(to_type->get_base_type());
+	} else if (value_type == nyla::types::type_null) {
+		value->type = to_type; // Replacing null type with the type of the pointer
+	} else if (value_type != to_type) {
+		value = make_cast(value, to_type);
+	}
 }
 
-nyla::aexpr* analysis::gen_default_value(nyla::type* type) {
-	switch (type->tag) {
-	case TYPE_ARR:
-		assert(!"Cannot generate a default value for an array");
-		break;
-	case TYPE_BYTE: {
-		nyla::anumber* value = make_node<nyla::anumber>(AST_VALUE_BYTE, type->st, type->et);
-		value->checked_type = type;
-		value->value_int = 0;
-		return value;
-	}
-	case TYPE_SHORT: {
-		nyla::anumber* value = make_node<nyla::anumber>(AST_VALUE_SHORT, type->st, type->et);
-		value->checked_type = type;
-		value->value_int = 0;
-		return value;
-	}
-	case TYPE_INT: {
-		nyla::anumber* value = make_node<nyla::anumber>(AST_VALUE_INT, type->st, type->et);
-		value->checked_type = type;
-		value->value_int = 0;
-		return value;
-	}
-	case TYPE_LONG: {
-		nyla::anumber* value = make_node<nyla::anumber>(AST_VALUE_LONG, type->st, type->et);
-		value->checked_type = type;
-		value->value_long = 0;
-		return value;
-	}
-	case TYPE_UBYTE: {
-		nyla::anumber* value = make_node<nyla::anumber>(AST_VALUE_UBYTE, type->st, type->et);
-		value->checked_type = type;
-		value->value_uint = 0;
-		return value;
-	}
-	case TYPE_USHORT: {
-		nyla::anumber* value = make_node<nyla::anumber>(AST_VALUE_USHORT, type->st, type->et);
-		value->checked_type = type;
-		value->value_uint = 0;
-		return value;
-	}
-	case TYPE_UINT: {
-		nyla::anumber* value = make_node<nyla::anumber>(AST_VALUE_UINT, type->st, type->et);
-		value->checked_type = type;
-		value->value_uint = 0;
-		return value;
-	}
-	case TYPE_ULONG: {
-		nyla::anumber* value = make_node<nyla::anumber>(AST_VALUE_ULONG, type->st, type->et);
-		value->checked_type = type;
-		value->value_ulong = 0;
-		return value;
-	}
-	case TYPE_FLOAT: {
-		nyla::anumber* value = make_node<nyla::anumber>(AST_VALUE_FLOAT, type->st, type->et);
-		value->checked_type = type;
-		value->value_float = 0.0F;
-		return value;
-	}
-	case TYPE_DOUBLE: {
-		nyla::anumber* value = make_node<nyla::anumber>(AST_VALUE_DOUBLE, type->st, type->et);
-		value->checked_type = type;
-		value->value_double = 0.0;
-		return value;
-	}
-	case TYPE_CHAR16: {
-		nyla::anumber* value = make_node<nyla::anumber>(AST_VALUE_CHAR16, type->st, type->et);
-		value->checked_type = type;
-		value->value_int = 0;
-		return value;
-	}
-	default:
-		assert(!"Failed to implement default value for type");
-		break;
-	}
-	return nullptr;
+bool nyla::analysis::is_lvalue(nyla::aexpr* expr) {
+
+	// lvalue includes
+	// 1. identifiers
+	// 2. array accesses
+	// 3. dot ops (except for .length or a function call that returns void)
+	// 4. function calls except if they return void (is this accurate?)
+
+
+	// TODO: implement!!
+	return true;
 }
 
-nyla::avariable* analysis::get_variable(nyla::aexpr* expr) {
-	switch (expr->tag) {
-	case AST_IDENTIFIER:
-		return dynamic_cast<nyla::aidentifier*>(expr)->variable;
-	case AST_VARIABLE:
-		return dynamic_cast<nyla::avariable*>(expr);
-	case AST_ARRAY_ACCESS:
-		return dynamic_cast<nyla::aarray_access*>(expr)->ident->variable;
+void nyla::analysis::compare_arr_size(nyla::aarray* arr,
+	                                  const std::vector<u32>& computed_arr_dim_sizes,
+	                                  u32 depth) {
+	if (arr->elements.size() > computed_arr_dim_sizes[depth]) {
+		m_log.err(ERR_ARR_TOO_MANY_INIT_VALUES, arr);
 	}
-	assert(!"Should only be called when trying to get an already allocated lvalue");
-	return nullptr;
+	arr->dim_size = computed_arr_dim_sizes[depth];
+	if (arr->type->element_type->tag == TYPE_ARR) {
+		for (nyla::aexpr* element : arr->elements) {
+			nyla::aarray* arr_element = dynamic_cast<nyla::aarray*>(element);
+			compare_arr_size(arr_element, computed_arr_dim_sizes, depth + 1);
+		}
+	}
+}
+
+void nyla::analysis::compare_arr_size(nyla::astring* str,
+	                                  const std::vector<u32>& computed_arr_dim_sizes,
+	                                  u32 depth) {
+	// TODO: only comparing against 8 bit strings
+	if (str->lit8.length() > computed_arr_dim_sizes[depth]) {
+		m_log.err(ERR_ARR_TOO_MANY_INIT_VALUES, str);
+	}
+	str->dim_size = computed_arr_dim_sizes[depth];
 }

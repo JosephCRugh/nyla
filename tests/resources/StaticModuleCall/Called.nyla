@@ -1,0 +1,5 @@
+module Called {
+	public static int CallMe(int v) {
+		return 631 + v;
+	}
+}

@@ -1,8 +1,0 @@
-int main() {
-	byte b = cast(byte) 5;
-	short c = cast(short) b + 3;
-	int a = cast(int) c + b;
-	double ddd = 21.0 + c / a;
-	int j = cast(int) ddd;
-	return 0;
-}

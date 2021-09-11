@@ -1,0 +1,8 @@
+module MoreArithmetic {
+	public static int main() {
+		int a = 22;
+		int b = a << 6;
+		int c = b % 20;
+		return c + (312312 >> 3) ^ 7;
+	}
+}

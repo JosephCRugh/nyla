@@ -1,0 +1,14 @@
+module Abc {
+
+	int a;
+	int b;
+
+	public static int main() {
+	
+		Abc y = var Abc();
+		y.a = 55;
+		y.b = 66;
+
+		return y.a + y.b;
+	}
+}

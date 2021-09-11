@@ -1,78 +1,113 @@
-#pragma once
+#ifndef NYLA_ANALYSIS_H
+#define NYLA_ANALYSIS_H
 
 #include "ast.h"
-#include "sym_table.h"
 #include "log.h"
+#include "compiler.h"
+#include "llvm_gen.h"
 
 namespace nyla {
 
 	class analysis {
 	public:
 
-		analysis(nyla::sym_table& sym_table, nyla::log& log)
-			: m_sym_table(sym_table), m_log(log) {
-		}
+		analysis(nyla::compiler& compiler, nyla::log& log,
+			     nyla::sym_table* sym_table, nyla::afile_unit* file_unit);
 
-		void type_check_file_unit(nyla::afile_unit* file_unit);
+		void check_file_unit();
 
-		void type_check_function(nyla::afunction* function);
-
-		void type_check_function_call(nyla::afunction_call* function_call);
-
-		void type_check_expression(nyla::aexpr* expr);
-
-		void type_check_return(nyla::areturn* ret);
-
-		void type_check_number(nyla::anumber* number);
-
-		void type_check_binary_op(nyla::abinary_op* binary_op);
-
-		void type_check_unary_op(nyla::aunary_op* unary_op);
-
-		void type_check_variable_decl(nyla::avariable_decl* variable_decl);
-
-		void type_check_type_cast(nyla::atype_cast* type_cast);
-
-		void type_check_identifier(nyla::aidentifier* identifier_as_expr);
-
-		void type_check_for_loop(nyla::afor_loop* for_loop);
-
-		void type_check_type(nyla::type* type);
-
-		void type_check_array(nyla::aarray* arr, const std::vector<u64>& depths, u32 depth = 0);
-
-		void type_check_array_access(nyla::aarray_access* array_access, u32 depth = 0);
+		nyla::afile_unit* get_file_unit() { return m_file_unit; }
 
 	private:
 
-		void flatten_array(nyla::type* assign_type, std::vector<u64> depths,
-			               nyla::aarray* arr, nyla::aarray*& out_arr, u32 depth = 0);
+		void check_module(nyla::amodule* nmodule);
 
-		bool is_assignable_to(nyla::aexpr* from, nyla::type* to);
+		void check_expression(nyla::aexpr* expr);
 
-		bool attempt_assign(nyla::aexpr*& lhs, nyla::aexpr*& rhs);
+		void check_function(nyla::afunction* function);
 
-		bool attempt_pass_arg(nyla::aexpr*& argument, nyla::type* param_type);
+		void check_variable_decl(nyla::avariable_decl* variable_decl);
 
-		bool only_works_on_ints(u32 op);
+		void check_return(nyla::areturn* ret);
 
-		bool only_works_on_numbers(u32 op);
+		void check_number(nyla::anumber* number);
 
-		bool is_comp_op(u32 op);
+		void check_binary_op(nyla::abinary_op* binary_op);
 
-		nyla::atype_cast* make_cast(nyla::aexpr* value, nyla::type* cast_to_type);
+		void check_unary_op(nyla::aunary_op* unary_op);
 
-		void produce_error(error_tag tag, error_data* data,
-			               nyla::ast_node* node);
+		void check_ident(sym_scope* lookup_scope, nyla::aident* ident);
 
-		nyla::aexpr* gen_default_value(nyla::type* type);
+		void check_for_loop(nyla::afor_loop* for_loop);
+		void check_while_loop(nyla::awhile_loop* while_loop);
+		void check_loop(nyla::aloop_expr* loop);
 
-		nyla::avariable* get_variable(nyla::aexpr* expr);
+		void check_type_cast(nyla::atype_cast* type_cast);
 
-		nyla::afunction*      m_function;
-		nyla::ascope*         m_scope;
-		nyla::sym_table&      m_sym_table;
-		nyla::log&            m_log;
+		void check_function_call(bool static_call,
+								 sym_module* lookup_module,
+			                     nyla::afunction_call* function_call,
+			                     bool is_constructor);
+		sym_function* find_best_canidate(const std::vector<sym_function*>& canidates,
+			                             nyla::afunction_call* function_call,
+			                             bool is_constructor);
+		void check_function_call(sym_function* called_function,
+			                     nyla::afunction_call* function_call);
 
+		void check_array_access(sym_scope* lookup_scope, nyla::aarray_access* array_access);
+
+		void check_array(nyla::aarray* arr, u32 depth = 0);
+
+		void check_var_object(nyla::avar_object* var_object);
+
+		void check_dot_op(nyla::adot_op* dot_op);
+
+		void check_if(nyla::aif* ifstmt);
+
+		// Make sure to push/pop the sym_scope around calls to this
+		void check_scope(const std::vector<nyla::aexpr*>& stmts, bool& comptime);
+
+		// Utility stuff
+
+		bool is_assignable_to(nyla::type* to, nyla::type* from);
+
+		nyla::aexpr* make_cast(nyla::aexpr* value, nyla::type* to_type);
+
+		void attempt_assignment(nyla::type* to_type, nyla::aexpr*& value);
+
+		bool is_lvalue(nyla::aexpr* expr);
+
+		void compare_arr_size(nyla::aarray* arr,
+			                  const std::vector<u32>& computed_arr_dim_sizes,
+			                  u32 depth = 0);
+		void compare_arr_size(nyla::astring* str,
+			                  const std::vector<u32>& computed_arr_dim_sizes,
+			                  u32 depth = 0);
+
+		// Creates a new ast_node
+		template<typename node>
+		node* make(ast_tag tag, nyla::ast_node* anode) {
+			node* n = new node;
+			n->tag      = tag;
+			n->line_num = anode->line_num;
+			n->spos     = anode->spos;
+			n->epos     = anode->epos;
+			return n;
+		}
+
+		nyla::compiler&  m_compiler;
+		nyla::sym_table* m_sym_table;
+		nyla::log&       m_log;
+
+		  // Current scope to lookup values in
+		nyla::sym_scope*  m_sym_scope  = nullptr;
+		  // Current local module to lookup functions in
+		nyla::sym_module* m_sym_module = nullptr;
+		nyla::afile_unit* m_file_unit  = nullptr;
+		nyla::afunction*  m_function   = nullptr;
+
+		llvm_generator m_llvm_generator;
 	};
 }
+
+#endif

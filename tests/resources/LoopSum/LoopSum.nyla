@@ -1,0 +1,9 @@
+module LoopSum {
+	public static int main() { 
+		int total = 0;
+		for int i = 0; i < 55; i += 1 {
+		   total += i;
+		}
+		return total;
+	}
+}

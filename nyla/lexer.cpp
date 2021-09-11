@@ -1,9 +1,13 @@
 #include "lexer.h"
 
-#include <unordered_map>
+#include "words.h"
+
 #include <assert.h>
 
-using namespace nyla;
+/*
+ * No hash lookups simply character boolean
+ * sets to ensure speed.
+ */
 
 constexpr bool identifier_set[256] = {
 	0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, // 16
@@ -20,7 +24,7 @@ constexpr bool identifier_set[256] = {
 	1,1,1,1, 1,1,1,1, 1,1,1,0, 0,0,0,0,
 };
 
-constexpr bool whitespace_set[256] = {             
+constexpr bool whitespace_set[256] = {
 		0,0,0,0,0, 0,0,0,1,1,  // 0-9
 		0,1,1,0,0, 0,0,0,0,0,  // 10-19
 		0,0,0,0,0, 0,0,0,0,0,  // 20-29
@@ -37,40 +41,41 @@ constexpr bool digits_set[256] = {
 };
 
 constexpr bool eof_eol_set[256] = {
-// '\0'                       '\n'
-	1,   0,0,0, 0,0,0,0, 0,0,  1,  0,
-//    '\r'
-	0, 1
+	// '\0'                       '\n'
+		1,   0,0,0, 0,0,0,0, 0,0,  1,  0,
+		//    '\r'
+			0, 1
 };
 
 constexpr bool eol_set[256] = {
 	0,0,0,0, 0,0,0,0, 0,0,1,0,
-    0,1
+	0,1
 };
 
-nyla::word_token* nyla::get_reserved_word_token(c_string name) {
-	nyla::name n = nyla::name::make(name);
-	return new nyla::word_token(reserved_words[n], n);
-}
-
-lexer::lexer(nyla::reader& reader, nyla::log& log)
-	: m_reader(reader), m_log(log) {
-}
+// '"' '\r' '\n' '\0'
+constexpr bool string_end_set[256] = {
+	// '\0'                       '\n'
+		1,   0,0,0, 0,0,0,0, 0,0,  1,  0,  // 0-11
+	//    '\r'
+		0, 1,0,0,0, 0,0,0,0, 0,0,  0,  0,   // 12-24
+	//                     '"'
+		0, 0,0,0,0, 0,0,0,0,1
+};
 
 void nyla::lexer::consume_ignored() {
 	bool continue_eating = false;
 	do {
 		// Eating newlines
-		while (eol_set[m_reader.cur_char()]) {
-			switch (m_reader.cur_char()) {
+		while (eol_set[m_source.cur_char()]) {
+			switch (m_source.cur_char()) {
 			case '\n':
-				m_reader.next_char(); // consuming '\n'
+				m_source.next_char(); // consuming '\n'
 				on_new_line();
 				break;
 			case '\r':
-				m_reader.next_char(); // consuming '\r'
-				if (m_reader.cur_char() == '\n')
-					m_reader.next_char(); // consuming '\n' 
+				m_source.next_char(); // consuming '\r'
+				if (m_source.cur_char() == '\n')
+					m_source.next_char(); // consuming '\n' 
 				on_new_line();
 				break;
 			default:
@@ -79,31 +84,51 @@ void nyla::lexer::consume_ignored() {
 			}
 		}
 		// Eating whitespace
-		c8 ch = m_reader.cur_char();
+		c8 ch = m_source.cur_char();
 		while (whitespace_set[ch])
-			ch = m_reader.next_char();
+			ch = m_source.next_char();
 		// Eating single line comments
-		if (ch == '`' && m_reader.peek_char() == '`') {
-			m_reader.next_char(); // Consuming `
-			m_reader.next_char(); // Consuming `
-			ch = m_reader.cur_char();
+		if (ch == '/' && m_source.peek_char() == '/') {
+			m_source.next_char(); // Consuming /
+			m_source.next_char(); // Consuming /
+			ch = m_source.cur_char();
 			while (!eof_eol_set[ch])
-				ch = m_reader.next_char();
+				ch = m_source.next_char();
 		}
-		continue_eating = whitespace_set[ch]                       ||
-			              ch == '`' && m_reader.peek_char() == '`' ||
-			              eol_set[m_reader.cur_char()];
+
+		// Eating multi-line comments
+		if (ch == '/' && m_source.peek_char() == '*') {
+			m_source.next_char(); // Eating first  (
+			m_source.next_char(); // Eating second `
+			ch = m_source.cur_char();
+			while (!(ch == '*' && m_source.peek_char() == '/')) {
+				if (ch == '\0') {
+					m_log.err(ERR_UNCLOSED_COMMENT,
+						      m_line_num,
+						      m_source.position(),
+						      m_source.position());
+					return;
+				}
+				ch = m_source.next_char();
+			}
+			m_source.next_char(); // Eating first  `
+			m_source.next_char(); // Eating second )
+		}
+		ch = m_source.cur_char();
+		continue_eating = whitespace_set[ch] ||
+			ch == '`' && m_source.peek_char() == '`' ||
+			eol_set[m_source.cur_char()];
 	} while (continue_eating);
 }
 
-void lexer::on_new_line() {
+void nyla::lexer::on_new_line() {
 	++m_line_num;
 }
 
-nyla::token* lexer::next_token() {
+nyla::token nyla::lexer::next_token() {
 	consume_ignored();
-	m_start_pos = m_reader.position();
-	switch (m_reader.cur_char()) {
+	m_start_pos = m_source.position();
+	switch (m_source.cur_char()) {
 	case 'a': case 'b': case 'c': case 'd': case 'e':
 	case 'f': case 'g': case 'h': case 'i': case 'j':
 	case 'k': case 'l': case 'm': case 'n': case 'o':
@@ -117,234 +142,299 @@ nyla::token* lexer::next_token() {
 	case 'U': case 'V': case 'W': case 'X': case 'Y':
 	case 'Z':
 		return next_word();
+	case '+': case '-': case '*': case '/':
+	case '%': case '&': case '|': case '^':
+	case '~': case '!': case '@': case '#':
+	case '=': case '.': case ';': case ',':
+	case '(': case ')': case '[': case ']':
+	case '<': case '>': case '{': case '}':
+	case '?':
+		return next_symbol();
 	case '0': case '1': case '2': case '3': case '4':
 	case '5': case '6': case '7': case '8': case '9':
 		return next_number();
-	case '+': case '-': case '*': case '/': case ';':
-	case '{': case '}': case ',': case '=': case '!':
-	case '<': case '>':
-	case '(': case ')':
-	case '[': case ']':
-	case '.':
-		return next_symbol();
 	case '"':
 		return next_string();
-	case '\0': case EOF:
-		return make_token<nyla::default_token>(TK_EOF, m_start_pos, m_start_pos);
+	case '\'':
+		return next_character();
+	case '\0':
+		return make(TK_EOF, m_start_pos, m_start_pos);
 	default: {
-		nyla::token* err_token = make_token<nyla::default_token>(TK_UNKNOWN, m_start_pos);
-		err_token->epos = m_start_pos + 1;
-		produce_error(ERR_UNKNOWN_CHAR,
-			error_data::make_char_load(m_reader.cur_char()),  err_token);
-		m_reader.next_char(); // Reading the unknown character.
-		return err_token;
+		nyla::token unknown_token = make(TK_UNKNOWN, m_start_pos, m_start_pos);
+		m_log.err(ERR_UNKNOWN_CHARACTER, unknown_token);
+		m_source.next_char(); // Eating the unknown character.
+		return unknown_token;
 	}
 	}
+	return nyla::token();
 }
 
-void nyla::lexer::print_tokens() {
-	nyla::token* token;
-	while ((token = next_token())->tag != TK_EOF) {
-		std::cout << token << std::endl;
-		delete token;
-	}
-}
-
-nyla::token* lexer::next_word() {
-	nyla::name name;
-	c8 ch = m_reader.cur_char();
+nyla::token nyla::lexer::next_word() {
+	nyla::word word;
+	c8 ch = m_source.cur_char();
 	while (identifier_set[ch]) {
-		name.append(ch);
-		ch = m_reader.next_char();
+		word.append(ch);
+		ch = m_source.next_char();
 	}
 
-	
-	if (name.size() > 0xFF) {
-		// TODO: report error about the name being too long
+	nyla::token word_token = make(TK_IDENTIFIER, m_start_pos, m_source.position());
+	word_token.word_key = g_word_table->get_key(word);
+
+	if (word.size() > 0xFF) {
+		m_log.err(ERR_IDENTIFIER_TOO_LONG, word_token);
 	}
 
-	if (name == nyla::bool_true_word) {
-		nyla::bool_token* bool_token = make_token<nyla::bool_token>(TK_VALUE_BOOL, m_start_pos);
-		bool_token->epos = m_reader.position();
-		bool_token->tof = true;
-		return bool_token;
-	}
-	if (name == nyla::bool_false_word) {
-		nyla::bool_token* bool_token = make_token<nyla::bool_token>(TK_VALUE_BOOL, m_start_pos);
-		bool_token->epos = m_reader.position();
-		bool_token->tof = false;
-		return bool_token;
-	}
-	nyla::word_token* word_token = make_token<nyla::word_token>(TK_IDENTIFIER, m_start_pos);
-	word_token->epos = m_reader.position();
-
-	auto it = reserved_words.find(name);
+	auto it = reserved_words.find(word_token.word_key);
 	if (it != reserved_words.end()) {
-		word_token->tag  = it->second;
-		word_token->name = *g_name_table->find(name);
-		return word_token;
+		word_token.tag = it->second;
 	}
 
-	word_token->name = g_name_table->register_name(name);
 	return word_token;
 }
 
-nyla::token* lexer::next_symbol() {
-	c8 ch = m_reader.cur_char();
+nyla::token nyla::lexer::next_symbol() {
+	#define DOUBLE_SYMBOLS(fst, snd, tk_tag) \
+case fst: {                              \
+	ch = m_source.next_char();           \
+	if (ch == snd) {                     \
+			m_source.next_char();        \
+			return make(tk_tag,          \
+				        m_start_pos,     \
+				        m_start_pos + 2);\
+	}                                    \
+	return make(fst, m_start_pos,        \
+	                 m_start_pos + 1);   \
+}
+	c8 ch = m_source.cur_char();
 	switch (ch) {
+	DOUBLE_SYMBOLS('*', '=', TK_STAR_EQ)
+	DOUBLE_SYMBOLS('/', '=', TK_SLASH_EQ)
+	DOUBLE_SYMBOLS('%', '=', TK_MOD_EQ)
+	DOUBLE_SYMBOLS('^', '=', TK_CRT_EQ)
+	DOUBLE_SYMBOLS('!', '=', TK_EXL_EQ)
+	DOUBLE_SYMBOLS('=', '=', TK_EQ_EQ)
 	case '+': {
-		ch = m_reader.next_char(); // consuming +
+		ch = m_source.next_char(); // Eating +
 		if (ch == '=') {
-			m_reader.next_char(); // consuming =
-			return make_token<nyla::default_token>(TK_PLUS_EQ, m_start_pos, m_start_pos + 2);
+			m_source.next_char(); // Eating =
+			return make(TK_PLUS_EQ, m_start_pos, m_start_pos + 2);
+		} else if (ch == '+') {
+			m_source.next_char(); // Eating +
+			return make(TK_PLUS_PLUS, m_start_pos, m_start_pos + 2);
 		}
-		return make_token<nyla::default_token>('+', m_start_pos, m_start_pos + 1);
+		return make('+', m_start_pos, m_start_pos + 1);
 	}
-	case '-': {
-		ch = m_reader.next_char(); // consuming -
-		if (ch == '=') {
-			m_reader.next_char(); // consuming =
-			return make_token<nyla::default_token>(TK_MINUS_EQ, m_start_pos, m_start_pos + 2);
-		}
-		return make_token<nyla::default_token>('-', m_start_pos, m_start_pos + 1);
-	}
-	case '/': {
-		ch = m_reader.next_char(); // consuming /
-		if (ch == '=') {
-			m_reader.next_char(); // consuming =
-			return make_token<nyla::default_token>(TK_DIV_EQ, m_start_pos, m_start_pos + 2);
-		}
-		return make_token<nyla::default_token>('/', m_start_pos, m_start_pos + 1);
-	}
-	case '*': {
-		ch = m_reader.next_char(); // consuming *
-		if (ch == '=') {
-			m_reader.next_char(); // consuming =
-			return make_token<nyla::default_token>(TK_MUL_EQ, m_start_pos, m_start_pos + 2);
-		}
-		return make_token<nyla::default_token>('*', m_start_pos, m_start_pos + 1);
-	}
-	default:
-		nyla::token* symbol_token = make_token<nyla::default_token>(ch, m_start_pos, m_start_pos + 1);
-		m_reader.next_char(); // Consuming the symbol.
-		return symbol_token;
-	}
-}
-
-std::tuple<u32, u32> lexer::read_unsigned_digits() {
-
-	u32 start = m_reader.position();
-	c8 ch = m_reader.cur_char();
-	while (digits_set[ch]) {
-		ch = m_reader.next_char();
-	}
-	u32 end = m_reader.position();
-	return std::tuple<u32, u32>{ start, end };
-}
-
-void lexer::produce_error(error_tag tag, error_data* data, nyla::token* token) {
-	m_log.error(tag, data, token, token);
-}
-
-nyla::num_token* lexer::next_integer(const std::tuple<u32, u32>& digits_before_dot) {
-	std::tuple<u64, bool> int_value = calculate_int_value(digits_before_dot);
-
-	nyla::num_token* num_token = nyla::num_token::make_int(std::get<0>(int_value));
-	num_token->line_num = m_line_num;
-	num_token->spos     = m_start_pos;
-	num_token->epos     = m_reader.position();
-
-	// Modifies the type. Ex. u converts to unsigned
-	c8 unit_type = m_reader.cur_char();
-	// TODO: modifiers
-
-	if (std::get<1>(int_value)) {
-		produce_error(ERR_INT_TOO_LARGE,
-			error_data::make_str_literal_load(m_reader.from_range(digits_before_dot).c_str()),
-			num_token);
-	}
-
-	return num_token;
-}
-
-std::tuple<u64, bool> lexer::calculate_int_value(const std::tuple<u32, u32>& digits) {
-	u64 int_value = 0;
-	u64 prev_value = -1;
-	bool too_large = false;
-	for (ulen index = std::get<0>(digits); index < std::get<1>(digits); index++) {
-		prev_value = int_value;
-		int_value *= 10;
-		int_value += (u64)((u64)m_reader[index] - '0');
-		if (int_value < prev_value) {
-			too_large = true;
-			break;
-		} else if (int_value == 0xFF'FF'FF'FF'FF'FF'FF'FF) {
-			// Possible overflow unless the numeric value fits exactly.
-			// largest possible value:  18,446,744,073,709,551,615
-			// previous digits must be: 18,446,744,073,709,551,61
-			// followed by 5
-			if (!(prev_value == 1844674407370955161 &&
-				m_reader[index] == '5'
-				)) {
-				too_large = true;
-				break;
+	case '?': {
+		ch = m_source.next_char(); // Eating ?
+		if (ch == '?') {
+			if (m_source.peek_char() == '?') {
+				m_source.next_char(); // Eating ?
+				m_source.next_char(); // Eating ?
+				return make(TK_QQQ, m_start_pos, m_start_pos + 3);
 			}
 		}
+		return make('?', m_start_pos, m_start_pos + 1);
 	}
-
-	return std::tuple<u64, bool>{ int_value, too_large };
+	case '-': {
+		ch = m_source.next_char(); // Eating -
+		if (ch == '=') {
+			m_source.next_char(); // Eating =
+			return make(TK_MINUS_EQ, m_start_pos, m_start_pos + 2);
+		} else if (ch == '-') {
+			m_source.next_char(); // Eating -
+			return make(TK_MINUS_MINUS, m_start_pos, m_start_pos + 2);
+		} else if (ch == '>') {
+			m_source.next_char(); // Eating >
+			return make(TK_MINUS_GT, m_start_pos, m_start_pos + 2);
+		}
+		return make('-', m_start_pos, m_start_pos + 1);
+	}
+	case '|': {
+		ch = m_source.next_char(); // Eating |
+		switch (ch) {
+		case '=': {
+			m_source.next_char(); // Eating =
+			return make(TK_BAR_EQ, m_start_pos, m_start_pos + 2);
+		}
+		case '|': {
+			m_source.next_char(); // Eating |
+			return make(TK_BAR_BAR, m_start_pos, m_start_pos + 2);
+		}
+		}
+		return make('|', m_start_pos, m_start_pos + 1);
+	}
+	case '&': {
+		ch = m_source.next_char(); // Eating &
+		switch (ch) {
+		case '=': {
+			m_source.next_char(); // Eating =
+			return make(TK_AMP_EQ, m_start_pos, m_start_pos + 2);
+		}
+		case '&': {
+			m_source.next_char(); // Eating &
+			return make(TK_AMP_AMP, m_start_pos, m_start_pos + 2);
+		}
+		}
+		return make('&', m_start_pos, m_start_pos + 1);
+	}
+	case '>': {
+		ch = m_source.next_char(); // Eating >
+		if (ch == '>') {
+			ch = m_source.next_char(); // Eating >
+			if (ch == '=') {
+				m_source.next_char(); // Eating =
+				return make(nyla::TK_GT_GT_EQ, m_start_pos, m_start_pos + 3);
+			}
+			return make(nyla::TK_GT_GT, m_start_pos, m_start_pos + 2);
+		} else if (ch == '=') { // >=
+			m_source.next_char(); // Eating =
+			return make(nyla::TK_GT_EQ, m_start_pos, m_start_pos + 2);
+		}
+		return make('>', m_start_pos, m_start_pos + 1);
+	}
+	case '<': {
+		ch = m_source.next_char(); // Eating <
+		if (ch == '<') {
+			ch = m_source.next_char(); // Eating <
+			if (ch == '=') {
+				m_source.next_char(); // Eating =
+				return make(nyla::TK_LT_LT_EQ, m_start_pos, m_start_pos + 3);
+			}
+			return make(nyla::TK_LT_LT, m_start_pos, m_start_pos + 2);
+		} else if (ch == '=') { // <=
+			m_source.next_char(); // Eating =
+			return make(nyla::TK_LT_EQ, m_start_pos, m_start_pos + 2);
+		}
+		return make('<', m_start_pos, m_start_pos + 1);
+	}
+	default: {
+		nyla::token symbol_token = make(ch, m_start_pos,
+			                                 m_start_pos + 1);
+		m_source.next_char(); // Eating the symbol
+		return symbol_token;
+	}
+	}
+#undef DOUBLE_SYMBOLS
 }
 
-nyla::num_token* lexer::next_float(const std::tuple<u32, u32>& digits_before_dot) {
-	m_reader.next_char(); // Consuming .
-	std::tuple<u32, u32> fraction_digits = read_unsigned_digits();
-	std::tuple<u32, u32> exponent_digits = { 0, 0 };
+nyla::token nyla::lexer::next_number() {
+	range digits_before_dot = read_unsigned_digits();
+	range fraction_digits = { 0, 0 };
+	range exponent_digits = { 0, 0 };
 	c8 exponent_sign = '+';
+	bool is_integer = true;
 
-	// Exponent symbol     4202.412E+34
-	if (m_reader.cur_char() == 'E') {
-		c8 possible_sign = m_reader.next_char();
+	if (m_source.cur_char() == '.') {
+		m_source.next_char(); // Eating .
+		fraction_digits = read_unsigned_digits();
+		is_integer = false;
+	}
+
+	if (m_source.cur_char() == 'E') {
+		is_integer = false;
+
+		c8 possible_sign = m_source.next_char();
 		if (possible_sign == '+' || possible_sign == '-') {
 			exponent_sign = possible_sign;
-			m_reader.next_char(); // Consuming + or -
+			m_source.next_char(); // Consuming + or -
 		}
 
 		exponent_digits = read_unsigned_digits();
 	}
 
-	std::tuple<u64, bool> unsigned_exponent_calc = calculate_int_value(exponent_digits);
-	bool exponent_too_large = std::get<1>(unsigned_exponent_calc);
-	s64 exponent_value = 0;
-	if (std::get<0>(unsigned_exponent_calc) > 0x7FFFFFFFFFFFFFFF) {
-		exponent_too_large = true;
-		exponent_value = 0x7FFFFFFFFFFFFFFF;
-	} else {
-		exponent_value = std::get<0>(unsigned_exponent_calc);
+	// checking for floating point units
+	if (m_source.cur_char() == 'f' || m_source.cur_char() == 'd') {
+		is_integer = false;
 	}
 
+	if (is_integer) {
+		return next_integer(digits_before_dot);
+	} else {
+		return next_float(digits_before_dot, fraction_digits,
+			              exponent_digits, exponent_sign);;
+	}
+}
+
+nyla::range nyla::lexer::read_unsigned_digits() {
+	u32 start = m_source.position();
+	c8 ch = m_source.cur_char();
+	while (digits_set[ch]) {
+		ch = m_source.next_char();
+	}
+	u32 end = m_source.position();
+	return range{ start, end };
+}
+
+nyla::token nyla::lexer::next_integer(const nyla::range& digits) {
+	std::tuple<u64, bool> int_calc_result = calculate_int_value(digits);
+	u64 int_value = std::get<0>(int_calc_result);
+	bool overflow = std::get<1>(int_calc_result);
+
+	nyla::token int_token;
+
+	if (overflow) {
+		int_token = make(TK_VALUE_ULONG, m_start_pos, m_source.position());
+		int_token.value_ulong = int_value;
+		m_log.err(ERR_INT_TOO_LARGE, int_token);
+		return int_token;
+	}
+
+	// Maximum signed 32-bit integer
+	if (int_value <= std::numeric_limits<s32>::max()) {
+		int_token = make(TK_VALUE_INT, m_start_pos, m_source.position());
+		int_token.value_int = int_value;
+	}
+	// Maximum unsigned 32-bit integer
+	else if (int_value <= std::numeric_limits<u32>::max()) {
+		int_token = make(TK_VALUE_UINT, m_start_pos, m_source.position());
+		int_token.value_uint = int_value;
+	}
+	// Maximum signed 64-bit integer
+	else if (int_value <= std::numeric_limits<s64>::max()) {
+		int_token = make(TK_VALUE_LONG, m_start_pos, m_source.position());
+		int_token.value_long = int_value;
+	}
+	// Only catagory left is an unsigned 64 bit integer
+	else {
+		int_token = make(TK_VALUE_ULONG, m_start_pos, m_source.position());
+		int_token.value_ulong = int_value;
+	}
+
+	return int_token;
+}
+
+nyla::token nyla::lexer::next_float(const range& whole_digits,
+	                                const range& fraction_digits,
+	                                const range& exponent_digits,
+	                                c8 exponent_sign) {
+	std::tuple<u64, bool> exp_value_result = calculate_int_value(exponent_digits);
+	u64 unsigned_exp_value = std::get<0>(exp_value_result);
+	bool exponent_too_large = std::get<1>(exp_value_result);
+	if (unsigned_exp_value > std::numeric_limits<s64>::max()) {
+		exponent_too_large = true;
+	}
+
+	s64 exponent_value = unsigned_exp_value;
 	if (exponent_sign == '-') {
 		exponent_value = -exponent_value;
 	}
-
-	u32 fraction_length = std::get<1>(fraction_digits) - std::get<0>(fraction_digits);
-	u32 whole_length = std::get<1>(digits_before_dot) - std::get<0>(digits_before_dot);
 
 	// Since the whole digits and fraction digits
 	// will be processed as if they are after the
 	// decimal the value will have to be shifted back
 	// the amount of digits that were shifted past the decimal.
-	exponent_value -= fraction_length;
+	exponent_value -= fraction_digits.length();
 
 	u32 index = 0;
 	double value = 0.0;
-	while (index < whole_length) {
-		u32 i = (u32)m_reader[index + std::get<0>(digits_before_dot)];
+	while (index < whole_digits.length()) {
+		u32 i = (u32)m_source[index + whole_digits.start];
 		value = 10.0 * value + (u32)(i - '0');
 		++index;
 	}
 	index = 0;
-	while (index < fraction_length) {
-		u32 i = (u32)m_reader[index + std::get<0>(fraction_digits)];
+	while (index < fraction_digits.length()) {
+		u32 i = (u32)m_source[index + fraction_digits.start];
 		value = 10.0 * value + (u32)(i - '0');
 		++index;
 	}
@@ -353,67 +443,160 @@ nyla::num_token* lexer::next_float(const std::tuple<u32, u32>& digits_before_dot
 		value *= pow(10.0, exponent_value);
 	}
 
-	nyla::num_token* float_token;
-	if (m_reader.cur_char() == 'f') {
-		float_token = nyla::num_token::make_float((float)value);
-		m_reader.next_char();
-	} else if (m_reader.cur_char() == 'd') {
-		float_token = nyla::num_token::make_double(value);
-		m_reader.next_char();
-	} else {
-		float_token = nyla::num_token::make_double(value);
-	}
-	float_token->line_num = m_line_num;
-	float_token->spos = m_start_pos;
-	float_token->epos = m_reader.position();
+	nyla::token float_token;
 
-	if (exponent_too_large) {
-		produce_error(ERR_EXPONENT_TOO_LARGE,
-			error_data::make_str_literal_load(m_reader.from_range(exponent_digits).c_str()),
-				float_token);
+	// Error in reading since the value is too large
+	if (exponent_too_large || isinf(value)) {
+		bool is_float32bits = false;
+		if (m_source.cur_char() == 'f') {
+			m_source.next_char(); // Eating f
+			float_token = make(TK_VALUE_FLOAT, m_start_pos, m_source.position());
+			float_token.value_float = std::numeric_limits<float>::max();
+			is_float32bits = true;
+		} else if (m_source.cur_char() == 'd') {
+			m_source.next_char(); // Eating d
+		}
+		if (!is_float32bits) {
+			float_token = make(TK_VALUE_DOUBLE, m_start_pos, m_source.position());
+			float_token.value_double = std::numeric_limits<double>::max();
+		}
+
+		m_log.err(ERR_FLOAT_TOO_LARGE, float_token);
+		
+		return float_token;
+	}
+
+	bool is_float32bits = false;
+	if (m_source.cur_char() == 'f') {
+		is_float32bits = true;
+		m_source.next_char(); // Eating f
+	} else if (m_source.cur_char() == 'd') {
+		m_source.next_char(); // Eating d
+	}
+
+	if (!is_float32bits) {
+		float_token = make(TK_VALUE_DOUBLE, m_start_pos, m_source.position());
+		float_token.value_double = value;
+	} else {
+		float_token = make(TK_VALUE_FLOAT, m_start_pos, m_source.position());
+		float_token.value_float = value;
 	}
 
 	return float_token;
 }
 
-nyla::num_token* lexer::next_number() {
-	std::tuple<u32, u32> digits_before_dot = read_unsigned_digits();
-
-	nyla::num_token* num_token = nullptr;
-	if (m_reader.cur_char() == '.') {
-		num_token = next_float(digits_before_dot);
-	} else {
-		num_token = next_integer(digits_before_dot);
+std::tuple<u64, bool> nyla::lexer::calculate_int_value(const nyla::range& digits) {
+	u64 int_value = 0;
+	u64 prev_value = -1;
+	bool overflow = false;
+	for (ulen index = digits.start; index < digits.end; index++) {
+		prev_value = int_value;
+		int_value *= 10;
+		int_value += (u64)((u64)m_source[index] - '0');
+		if (int_value < prev_value) {
+			overflow = true;
+			break;
+		} else if (int_value == 0xFF'FF'FF'FF'FF'FF'FF'FF) {
+			// Possible overflow unless the numeric value fits exactly.
+			// largest possible value:  18,446,744,073,709,551,615
+			// previous digits must be: 18,446,744,073,709,551,61
+			// followed by 5 and it must be the last digit.
+			if (!(prev_value == 1844674407370955161 &&
+				m_source[index] == '5' && index == digits.end - 1
+				)) {
+				overflow = true;
+				break;
+			}
+		}
 	}
-	return num_token;
+
+	return std::tuple<u64, bool>{ int_value, overflow };
 }
 
-nyla::string_token* nyla::lexer::next_string() {
-	c8 ch = m_reader.next_char(); // Consuming "
-	std::string lit = "";
-	while (ch != '"' && ch != '\0') {
+nyla::token nyla::lexer::next_string() {
+	c8 ch = m_source.next_char(); // Eating "
+	std::string str = "";
+	while (!string_end_set[ch]) {
 		switch (ch) {
-		case '\\':
-			ch = m_reader.next_char();
-			if (ch == 'n') {
-				lit += '\n';
+		case '\\': {
+			ch = m_source.next_char(); // Eating '\'
+			switch (ch) {
+				// TODO: Is this all the escape sequences?
+			case 'n':
+				str += '\n';
+				ch = m_source.next_char();
+				break;
+			case 'r':
+				str += '\r';
+				ch = m_source.next_char();
+				break;
+			case 't':
+				str += '\t';
+				ch = m_source.next_char();
+				break;
+			case '\\':
+				str += '\\';
+				ch = m_source.next_char();
+				break;
+			case '"':
+				str += '"';
+				ch = m_source.next_char();
+				break;
+			default: {
+				// No escape sequence found
+				m_log.err(ERR_INVALID_ESCAPE_SEQUENCE,
+					      m_line_num, m_source.position() - 1, m_source.position () + 1);
+				ch = m_source.next_char(); // Eating the bad '\'
+			}
 			}
 			break;
+		}
 		default:
-			lit += ch;
+			str += ch;
+			ch = m_source.next_char();
 			break;
 		}
-		ch = m_reader.next_char();
 	}
+
+	nyla::token str_token = make(TK_VALUE_STRING8, m_start_pos, m_source.position());
+	str_token.value_string8 = str;
 
 	if (ch == '"') {
-		m_reader.next_char(); // Consuming "
+		m_source.next_char();
+		str_token.epos = m_source.position();
 	} else {
-		// TODO: report error.
+		m_log.err(ERR_MISSING_CLOSING_QUOTE, str_token);
 	}
 
-	nyla::string_token* string_token =
-		make_token<nyla::string_token>(TK_STRING_VALUE, m_start_pos, m_reader.position());
-	string_token->lit = lit;
-	return string_token;
+	return str_token;
+}
+
+nyla::token nyla::lexer::next_character() {
+	c8 ch = m_source.next_char(); // Eating '
+	nyla::token character_token = make(TK_VALUE_CHAR8, m_start_pos, m_start_pos);
+	if (ch == '\\') {
+		// TODO: escape sequences
+		ch = m_source.next_char();
+		switch (ch) {
+		case 'n':
+			character_token.value_char8 = '\n';
+			ch = m_source.next_char(); // Consuming 'n'
+			break;
+		default: break;// TODO: produce error
+		}
+
+	} else {
+		character_token.value_char8 = ch;
+		ch = m_source.next_char(); // Eating character inside ''
+	}
+
+	if (ch == '\'') {
+		m_source.next_char(); // Eating closing '
+		character_token.epos = m_source.position();
+	} else {
+		character_token.epos = m_source.position();
+		m_log.err(ERR_MISSING_CLOSING_CHAR_QUOTE, character_token);
+	}
+
+	return character_token;
 }

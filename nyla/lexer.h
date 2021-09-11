@@ -1,69 +1,74 @@
-#pragma once
+#ifndef NYLA_LEXER_H
+#define NYLA_LEXER_H
 
-#include "reader.h"
-#include "token.h"
+#include "source.h"
 #include "log.h"
+#include "tokens.h"
 
 namespace nyla {
 
-	nyla::word_token* get_reserved_word_token(c_string name);
-
 	class lexer {
 	public:
-		
-		lexer(nyla::reader& reader, nyla::log& log);
 
-		/// <summary>
-		/// Obtains the next token by reading
-		/// from the reader.
-		/// </summary>
-		nyla::token* next_token();
+		lexer(nyla::source& source, nyla::log& log)
+			: m_source(source), m_log(log) {}
 
-		void print_tokens();
-
-		u32 get_line_num() { return m_line_num; }
+		// Obtains the next token by
+		// analyzing the current source.
+		nyla::token next_token();
 
 	private:
 
-		template<typename token_type>
-		token_type* make_token(u32 tag, u32 start_pos, u32 end_pos) {
-			token_type* token = new token_type(tag);
-			token->line_num = m_line_num;
-			token->spos = start_pos;
-			token->epos = end_pos;
+		// Consumes whitespace and comments
+		// until the start of a new token.
+		void consume_ignored();
+
+		// Process encountering a new line
+		void on_new_line();
+
+		// Next token is an identifier or
+		// keyword.
+		nyla::token next_word();
+
+		// Next token is a symbol.
+		nyla::token next_symbol();
+
+		// Next token is an integer
+		// or float.
+		nyla::token next_number();
+		nyla::range read_unsigned_digits();
+		nyla::token next_integer(const nyla::range& digits);
+		nyla::token next_float(const range& whole_digits,
+			                   const range& fraction_digits,
+			                   const range& exponent_digits,
+			                   c8 exponent_sign);
+		// Calculate an integer value based on a range of digits
+		// @returns the computed value and a boolean to indicate if
+		//          there was overflow
+		std::tuple<u64, bool> calculate_int_value(const nyla::range& digits);
+
+		// Next token is a string
+		nyla::token next_string();
+
+		// Next token is a character
+		nyla::token next_character();
+
+		inline nyla::token make(u32 tag, u32 start_pos, u32 end_pos) {
+			nyla::token token;
+			token.tag      = tag;
+			token.line_num = m_line_num;
+			token.spos     = start_pos;
+			token.epos     = end_pos;
 			return token;
 		}
 
-		template<typename token_type>
-		token_type* make_token(u32 tag, u32 start_pos) {
-			return make_token<token_type>(tag, start_pos, start_pos);
-		}
-
-		void consume_ignored();
-
-		void on_new_line();
-
-		nyla::token* next_word();
-
-		nyla::token* next_symbol();
-
-		nyla::num_token* next_number();
-
-		nyla::string_token* next_string();
-
-		nyla::num_token* next_float(const std::tuple<u32, u32>& digits_before_dot);
-
-		nyla::num_token* next_integer(const std::tuple<u32, u32>& digits_before_dot);
-
-		std::tuple<u64, bool> calculate_int_value(const std::tuple<u32, u32>& digits);
-
-		std::tuple<u32, u32> read_unsigned_digits();
-
-		void produce_error(error_tag tag, error_data* data, nyla::token* token);
-
-		nyla::reader& m_reader;
+		nyla::source& m_source;
 		nyla::log&    m_log;
-		u32           m_line_num = 1;
-		u32           m_start_pos;
+		u32           m_line_num  = 1;
+		u32           m_start_pos = 0; // The buffer position that
+							           // a token starts on
 	};
+
 }
+
+#endif

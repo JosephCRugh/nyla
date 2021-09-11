@@ -1,114 +1,335 @@
 #include "type.h"
 
 #include <assert.h>
+#include "sym_table.h"
+#include "words.h"
 
-using namespace nyla;
+// Integers
+nyla::type* nyla::types::type_byte   = new nyla::type(nyla::TYPE_BYTE);
+nyla::type* nyla::types::type_short  = new nyla::type(nyla::TYPE_SHORT);
+nyla::type* nyla::types::type_int    = new nyla::type(nyla::TYPE_INT);
+nyla::type* nyla::types::type_long   = new nyla::type(nyla::TYPE_LONG);
+nyla::type* nyla::types::type_ubyte  = new nyla::type(nyla::TYPE_UBYTE);
+nyla::type* nyla::types::type_ushort = new nyla::type(nyla::TYPE_USHORT);
+nyla::type* nyla::types::type_uint   = new nyla::type(nyla::TYPE_UINT);
+nyla::type* nyla::types::type_ulong  = new nyla::type(nyla::TYPE_ULONG);
+// Characters
+nyla::type* nyla::types::type_char8  = new nyla::type(nyla::TYPE_CHAR8);
+nyla::type* nyla::types::type_char16 = new nyla::type(nyla::TYPE_CHAR16);
+nyla::type* nyla::types::type_char32 = new nyla::type(nyla::TYPE_CHAR32);
+// Floats
+nyla::type* nyla::types::type_float  = new nyla::type(nyla::TYPE_FLOAT);
+nyla::type* nyla::types::type_double = new nyla::type(nyla::TYPE_DOUBLE);
+// Other
+nyla::type* nyla::types::type_bool   = new nyla::type(nyla::TYPE_BOOL);
+nyla::type* nyla::types::type_void   = new nyla::type(nyla::TYPE_VOID);
+nyla::type* nyla::types::type_error  = new nyla::type(nyla::TYPE_ERROR);
+nyla::type* nyla::types::type_string = new nyla::type(nyla::TYPE_STRING);
+nyla::type* nyla::types::type_null   = new nyla::type(nyla::TYPE_NULL);
+nyla::type* nyla::types::type_mixed  = new nyla::type(nyla::TYPE_MIXED);
 
-nyla::type* nyla::reuse_types::byte_type   = new nyla::type(TYPE_BYTE);
-nyla::type* nyla::reuse_types::short_type  = new nyla::type(TYPE_SHORT);
-nyla::type* nyla::reuse_types::int_type    = new nyla::type(TYPE_INT);
-nyla::type* nyla::reuse_types::long_type   = new nyla::type(TYPE_LONG);
-nyla::type* nyla::reuse_types::ubyte_type  = new nyla::type(TYPE_UBYTE);
-nyla::type* nyla::reuse_types::ushort_type = new nyla::type(TYPE_USHORT);
-nyla::type* nyla::reuse_types::uint_type   = new nyla::type(TYPE_UINT);
-nyla::type* nyla::reuse_types::ulong_type  = new nyla::type(TYPE_ULONG);
-nyla::type* nyla::reuse_types::float_type  = new nyla::type(TYPE_FLOAT);
-nyla::type* nyla::reuse_types::double_type = new nyla::type(TYPE_DOUBLE);
-nyla::type* nyla::reuse_types::bool_type   = new nyla::type(TYPE_BOOL);
-nyla::type* nyla::reuse_types::void_type   = new nyla::type(TYPE_VOID);
-nyla::type* nyla::reuse_types::string_type = new nyla::type(TYPE_STRING);
-nyla::type* nyla::reuse_types::char16_type = new nyla::type(TYPE_CHAR16);
-nyla::type* nyla::reuse_types::error_type  = new nyla::type(TYPE_ERROR);
-nyla::type* nyla::reuse_types::mixed_type  = new nyla::type(TYPE_MIXED);
-nyla::type* nyla::reuse_types::null_type   = new nyla::type(TYPE_NULL);
 
-nyla::type* type::get_byte()       { return nyla::reuse_types::byte_type;   }
-nyla::type* type::get_short()      { return nyla::reuse_types::short_type;  }
-nyla::type* type::get_int()        { return nyla::reuse_types::int_type;    }
-nyla::type* type::get_long()       { return nyla::reuse_types::long_type;   }
-nyla::type* type::get_ubyte()      { return nyla::reuse_types::ubyte_type;  }
-nyla::type* type::get_ushort()     { return nyla::reuse_types::ushort_type; }
-nyla::type* type::get_uint()       { return nyla::reuse_types::uint_type;   }
-nyla::type* type::get_ulong()      { return nyla::reuse_types::ulong_type;  }
-nyla::type* type::get_float()      { return nyla::reuse_types::float_type;  }
-nyla::type* type::get_double()     { return nyla::reuse_types::double_type; }
-nyla::type* type::get_bool()       { return nyla::reuse_types::bool_type;   }
-nyla::type* type::get_void()       { return nyla::reuse_types::void_type;   }
-nyla::type* type::get_string()     { return nyla::reuse_types::string_type; }
-nyla::type* type::get_char16()     { return nyla::reuse_types::char16_type; }
-nyla::type* type::get_mixed()      { return nyla::reuse_types::mixed_type;  }
-nyla::type* type::get_error()      { return nyla::reuse_types::error_type;  }
-nyla::type* type::get_null()       { return nyla::reuse_types::null_type;   }
+nyla::type* nyla::type_table::find_type(nyla::type* type) {
+	auto it = table.find(*type);
+	if (it != table.end()) {
+		delete type;
+		return it->second;
+	}
+	table[*type] = type;
+	return type;
+}
 
-void type::calculate_arr_depth() {
-	assert(tag == TYPE_ARR);
-	if (elem_type->tag == TYPE_ARR) {
-		elem_type->calculate_arr_depth();
-		arr_depth = elem_type->arr_depth + 1;
-	} else {
-		arr_depth = 1;
+void nyla::type_table::clear_table() {
+	table.clear();
+}
+
+nyla::type_table* nyla::g_type_table = new nyla::type_table;
+
+
+
+
+bool nyla::type::equals(const nyla::type* o) const {
+	switch (tag) {
+	case TYPE_MODULE: {
+		if (o->tag != TYPE_MODULE) return false;
+		return unique_module_key == o->unique_module_key;
+	}
+	default: return o == this; // Simple pointer comparison
+						       // Benefits of the type table
 	}
 }
 
-void type::calculate_ptr_depth() {
+std::string nyla::type::to_string() const {
+	switch (tag) {
+	case TYPE_BYTE:      return "byte";
+	case TYPE_SHORT:     return "short";
+	case TYPE_INT:       return "int";
+	case TYPE_LONG:      return "long";
+	case TYPE_UBYTE:     return "ubyte";
+	case TYPE_USHORT:    return "ushort";
+	case TYPE_UINT:      return "uint";
+	case TYPE_ULONG:     return "ulong";
+	case TYPE_FLOAT:     return "float";
+	case TYPE_DOUBLE:    return "double";
+	case TYPE_BOOL:      return "bool";
+	case TYPE_VOID:      return "void";
+	case TYPE_CHAR8:     return "char8";
+	case TYPE_CHAR16:    return "char16";
+	case TYPE_CHAR32:    return "char32";
+	case TYPE_ERROR:     return "error";
+	case TYPE_STRING:    return "String";
+	case TYPE_MIXED:     return "<T>";
+	case TYPE_NULL:      return "null";
+	case TYPE_FD_MODULE: return nyla::g_word_table->get_word(fd_module_name_key).c_str();
+	case TYPE_MODULE:    return nyla::g_word_table->get_word(sym_module->name_key).c_str();
+	case TYPE_PTR:       return element_type->to_string() + "*";
+	case TYPE_ARR:       return element_type->to_string() + "[]";
+	}
+	assert(!"Unimplemented to_string");
+	return "";
+}
+
+void nyla::type::calculate_ptr_depth() {
 	assert(tag == TYPE_PTR);
-	if (elem_type->tag == TYPE_ARR) {
-		elem_type->calculate_ptr_depth();
-		ptr_depth = elem_type->ptr_depth + 1;
+	if (element_type->tag == TYPE_PTR) {
+		element_type->calculate_ptr_depth();
+		ptr_depth = element_type->ptr_depth + 1;
 	} else {
 		ptr_depth = 1;
 	}
 }
 
-nyla::type* nyla::type::get_array_at_depth(u32 req_depth, u32 depth) {
-	if (req_depth == depth) {
-		return this;
-	}
-	return elem_type->get_array_at_depth(req_depth, depth + 1);
-}
-
-nyla::type* type::get_array_base_type() {
-	if (elem_type->tag == TYPE_ARR) {
-		return elem_type->get_array_base_type();
+void nyla::type::calculate_arr_depth() {
+	assert(tag == TYPE_ARR);
+	if (element_type->tag == TYPE_ARR) {
+		element_type->calculate_arr_depth();
+		arr_depth = element_type->arr_depth + 1;
 	} else {
-		return elem_type;
+		arr_depth = 1;
 	}
 }
 
-nyla::type* type::get_ptr_base_type() {
-	if (elem_type->tag == TYPE_PTR) {
-		return elem_type->get_ptr_base_type();
-	} else {
-		return elem_type;
+nyla::type* nyla::type::get_int(u32 mem_size, bool is_signed) {
+	switch (mem_size) {
+	case 1: return is_signed ? types::type_byte : types::type_ubyte;
+	case 2: return is_signed ? types::type_short : types::type_ushort;
+	case 4: return is_signed ? types::type_int : types::type_uint;
+	case 8: return is_signed ? types::type_long : types::type_ulong;
+	default:
+		assert(!"Bad memory size");
+		return nullptr;
 	}
 }
 
-void type::set_array_base_type(nyla::type* type) {
-	if (elem_type->tag == TYPE_ARR) {
-		elem_type->set_array_base_type(type);
-	} else {
-		elem_type = type;
+nyla::type* nyla::type::get_float(u32 mem_size) {
+	switch (mem_size) {
+	case 4: return types::type_float;
+	case 8: return types::type_double;
+	default:
+		assert(!"Bad memory size");
+		return nullptr;
 	}
 }
 
-nyla::type* type::get_arr(nyla::type* elem_type, nyla::aexpr* dim_size) {
-	return new nyla::type(TYPE_ARR, elem_type, dim_size);
+nyla::type* nyla::type::get_char(u32 mem_size) {
+	switch (mem_size) {
+	case 1: return types::type_char8;
+	case 2: return types::type_char16;
+	case 4: return types::type_char32;
+	default:
+		assert(!"Bad memory size");
+		return nullptr;
+	}
 }
 
-nyla::type* type::get_ptr(nyla::type* elem_type) {
-	return new nyla::type(TYPE_PTR, elem_type);
+nyla::type* nyla::type::get_ptr(nyla::type* element_type) {
+	// TODO: optimize by only creating the type IF it does not exist in the table
+	nyla::type* ptr_t = new nyla::type(TYPE_PTR, element_type);
+	ptr_t->calculate_ptr_depth();
+    return nyla::g_type_table->find_type(ptr_t);
 }
 
-u32 type::get_mem_size() {
+nyla::type* nyla::type::get_arr(nyla::type* element_type) {
+	// TODO: optimize by only creating the type IF it does not exist in the table
+	nyla::type* arr_t = new nyla::type(TYPE_ARR, element_type);
+	arr_t->calculate_arr_depth();
+	return nyla::g_type_table->find_type(arr_t);
+}
+
+nyla::type* nyla::type::get_or_enter_module(nyla::sym_module* sym_module) {
+	assert(sym_module);
+	// TODO: optimize by only creating the type IF it does not exist in the table
+	nyla::type* type_m = new nyla::type(TYPE_MODULE);
+	type_m->unique_module_key = sym_module->unique_module_id;
+	type_m->sym_module = sym_module;
+	return nyla::g_type_table->find_type(type_m);
+}
+
+nyla::type* nyla::type::get_fd_module(nyla::type_table* local_type_table, u32 module_name_key) {
+	nyla::type* type_m = new nyla::type(TYPE_FD_MODULE);
+	type_m->fd_module_name_key = module_name_key;
+	return local_type_table->find_type(type_m);
+}
+
+void nyla::type::resolve_fd_type(nyla::sym_module* sym_module) {
+	assert(sym_module);
+	tag               = TYPE_MODULE;
+	unique_module_key = sym_module->unique_module_id;
+	this->sym_module  = sym_module;
+}
+
+nyla::type* nyla::type::get_base_type() const {
+	switch (tag) {
+	case TYPE_PTR: return get_ptr_base_type();
+	case TYPE_ARR: return get_arr_base_type();
+	default: assert(!"Should be unreachable");
+	}
+}
+
+nyla::type* nyla::type::get_arr_base_type() const {
+	switch (element_type->tag) {
+	case TYPE_ARR: return element_type->get_base_type();
+	default:       return element_type;
+	}
+}
+
+nyla::type* nyla::type::get_ptr_base_type() const {
+	switch (element_type->tag) {
+	case TYPE_PTR: return element_type->get_base_type();
+	default:       return element_type;
+	}
+}
+
+void nyla::type::set_base_type(nyla::type* base_type) {
+	switch (element_type->tag) {
+	case TYPE_PTR:
+	case TYPE_ARR:
+		element_type->set_base_type(base_type);
+		break;
+	default:
+		element_type = base_type;
+		break;
+	}
+}
+
+nyla::type* nyla::type::get_sub_array(u32 depth, u32 depth_count) {
+	if (depth == depth_count) return this;
+	// int[][][] b;
+	// b[0][0]
+	// depth = 2
+	// b[0]
+	// depth = 1
+	// b
+	// depth = 0
+	assert(element_type);
+	return element_type->get_sub_array(depth, depth_count + 1);
+}
+
+bool nyla::type::is_number() {
+	switch (tag) {
+	case TYPE_BYTE:
+	case TYPE_SHORT:
+	case TYPE_INT:
+	case TYPE_LONG:
+	case TYPE_UBYTE:
+	case TYPE_USHORT:
+	case TYPE_UINT:
+	case TYPE_ULONG:
+	case TYPE_FLOAT:
+	case TYPE_DOUBLE:
+	case TYPE_CHAR8:
+	case TYPE_CHAR16:
+	case TYPE_CHAR32:
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool nyla::type::is_int() {
+	switch (tag) {
+	case TYPE_BYTE:
+	case TYPE_SHORT:
+	case TYPE_INT:
+	case TYPE_LONG:
+	case TYPE_UBYTE:
+	case TYPE_USHORT:
+	case TYPE_UINT:
+	case TYPE_ULONG:
+		// Characters get included so math can
+		// be performed on them
+	case TYPE_CHAR8:
+	case TYPE_CHAR16:
+	case TYPE_CHAR32:
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool nyla::type::is_float() {
+	switch (tag) {
+	case TYPE_FLOAT:
+	case TYPE_DOUBLE:
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool nyla::type::is_signed() {
+	switch (tag) {
+	case TYPE_BYTE:
+	case TYPE_SHORT:
+	case TYPE_INT:
+	case TYPE_LONG:
+	case TYPE_FLOAT:
+	case TYPE_DOUBLE:
+	case TYPE_CHAR8:  // It might not be good to have
+	case TYPE_CHAR16: // characters be signed?
+	case TYPE_CHAR32:
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool nyla::type::is_char() {
+	switch (tag) {
+	case TYPE_CHAR8:
+	case TYPE_CHAR16:
+	case TYPE_CHAR32:
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool nyla::type::is_ptr() {
+	return tag == TYPE_PTR;
+}
+
+bool nyla::type::is_arr() {
+	return tag == TYPE_ARR;
+}
+
+bool nyla::type::is_module() {
+	return tag == TYPE_MODULE;
+}
+
+u32 nyla::type::mem_size() {
 	switch (tag) {
 	case TYPE_BYTE:
 	case TYPE_UBYTE:
+	case TYPE_CHAR8:
 		return 1;
 	case TYPE_SHORT:
 	case TYPE_USHORT:
+	case TYPE_CHAR16:
 		return 2;
 	case TYPE_INT:
 	case TYPE_UINT:
+	case TYPE_CHAR32:
 		return 4;
 	case TYPE_LONG:
 	case TYPE_ULONG:
@@ -117,150 +338,13 @@ u32 type::get_mem_size() {
 	case TYPE_DOUBLE: return 8;
 	case TYPE_BOOL:   return 1;
 	case TYPE_VOID:   return 0;
-	case TYPE_ERROR:  return 0;
+		// TODO: Hard coding this is probably a bad idea
+		// if we want to allow building 32 bit code on 64 bit machines
+	case TYPE_ARR:
+	case TYPE_PTR:    return sizeof(void*);
 	default:
 		assert(!"Missing memory size for type");
-		break;
-	}
-	return u32();
-}
-
-bool type::is_int() {
-	switch (tag) {
-	case TYPE_BYTE:
-	case TYPE_SHORT:
-	case TYPE_INT:
-	case TYPE_LONG:
-	case TYPE_UBYTE:
-	case TYPE_USHORT:
-	case TYPE_UINT:
-	case TYPE_ULONG:
-		return true;
-	default:
-		return false;
+		return 0;
 	}
 }
 
-bool type::is_number() {
-	switch (tag) {
-	case TYPE_BYTE:
-	case TYPE_SHORT:
-	case TYPE_INT:
-	case TYPE_LONG:
-	case TYPE_UBYTE:
-	case TYPE_USHORT:
-	case TYPE_UINT:
-	case TYPE_ULONG:
-	case TYPE_FLOAT:
-	case TYPE_DOUBLE:
-		return true;
-	default:
-		return false;
-	}
-}
-
-bool type::is_signed() {
-	switch (tag) {
-	case TYPE_BYTE:
-	case TYPE_SHORT:
-	case TYPE_INT:
-	case TYPE_LONG:
-	case TYPE_FLOAT:
-	case TYPE_DOUBLE:
-		return true;
-	default:
-		return false;
-	}
-}
-
-bool type::is_float() {
-	switch (tag) {
-	case TYPE_FLOAT:
-	case TYPE_DOUBLE:
-		return true;
-	default:
-		return false;
-	}
-}
-
-bool type::is_ptr() {
-	return tag == TYPE_PTR;
-}
-
-bool nyla::type::is_arr() {
-	return tag == TYPE_ARR;
-}
-
-bool nyla::type::operator!=(const nyla::type& o) {
-	return !(*this == o);
-}
-
-bool nyla::type::operator==(const nyla::type& o) {
-	assert(!is_arr());
-	if (tag != o.tag) {
-		return false;
-	}
-	if (tag == TYPE_PTR) {
-		return ptr_depth == o.ptr_depth;
-	}
-	return true;
-}
-
-std::ostream& nyla::operator<<(std::ostream& os, const nyla::type& type) {
-	switch (type.tag) {
-	case TYPE_ARR:
-		os << *type.elem_type;
-		os << "[]";
-		break;
-	case TYPE_PTR:
-		os << *type.elem_type;
-		os << "*";
-		break;
-	default:
-		type.print_elem(os, type.tag);
-		break;
-	}
-
-	//switch (type.tag) {
-	//case TYPE_PTR:
-	//case TYPE_ARR:
-	//	type.print_elem(os, type.elem_tag);
-	//	break;
-	//default:
-	//	type.print_elem(os, type.tag);
-	//	break;
-	//}
-	//for (u32 i = 0; i < type.ptr_depth; i++) {
-	//	os << "*";
-	//}
-	//for (u32 i = 0; i < type.array_depths.size(); i++) {
-	//	os << "[]";
-	//}
-	return os;
-}
-
-void type::print_elem(std::ostream& os, type_tag elem_tag) const {
-	switch (elem_tag) {
-	case TYPE_BYTE:     os << "byte";   break;
-	case TYPE_SHORT:    os << "short";  break;
-	case TYPE_INT:      os << "int";    break;
-	case TYPE_LONG:     os << "long";   break;
-	case TYPE_UBYTE:    os << "ubyte";  break;
-	case TYPE_USHORT:   os << "ushort"; break;
-	case TYPE_UINT:     os << "uint";   break;
-	case TYPE_ULONG:    os << "ulong";  break;
-	case TYPE_FLOAT:    os << "float";  break;
-	case TYPE_DOUBLE:   os << "double"; break;
-	case TYPE_BOOL:     os << "bool";   break;
-	case TYPE_VOID:     os << "void";   break;
-	case TYPE_STRING:   os << "String"; break;
-	case TYPE_CHAR16:   os << "char16"; break;
-	case TYPE_MIXED:    os << "<T>";    break;
-	case TYPE_NULL:     os << "null";   break;
-	case TYPE_ERROR:    os << "error";  break;
-	default:
-		os << "THE TYPE NOT IMPLEMENTED: " << elem_tag << std::endl;
-		assert(!"Unimplemented elem tag!");
-		break;
-	}
-}

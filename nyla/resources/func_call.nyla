@@ -1,7 +1,0 @@
-int main() {
-	return func(54);
-}
-
-int func(int j) {
-	return 7 + j;
-}
