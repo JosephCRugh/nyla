@@ -52,6 +52,14 @@ void nyla::log::global_error(error_tag tag, const error_payload& payload) {
 		std::cerr << "Could not find entry point for program";
 		break;
 	}
+	case ERR_FILE_WITH_MAIN_FUNCTION_DOES_NOT_EXIST: {
+		std::cerr << "The file '" << payload.d_string->str << "' could not be found";
+		break;
+	}
+	case ERR_FILE_WITH_MAIN_FUNCTION_EMPTY: {
+		std::cerr << "The entry point file was empty";
+		break;
+	}
 	}
 	std::cerr << ".\n";
 }
@@ -116,6 +124,10 @@ void nyla::log::err(error_tag tag, const error_payload& payload,
 		std::cerr << "Could not find import";
 		break;
 	}
+	case ERR_CANNOT_IMPORT_SELF: {
+		std::cerr << "Cannot import the this file as an import";
+		break;
+	}
 	case ERR_EXPECTED_MODULE: {
 		std::cerr << "Expected to find a module";
 		break;
@@ -139,6 +151,12 @@ void nyla::log::err(error_tag tag, const error_payload& payload,
 	}
 	case ERR_FUNCTION_REDECLARATION: {
 		std::cerr << "Attempting to redeclare function '"
+			      << word_as_string(payload.d_func_decl->word_key)
+			      << "'. First declared at line: " << payload.d_func_decl->line_num;
+		break;
+	}
+	case ERR_CONSTRUCTOR_REDECLARATION: {
+		std::cerr << "Attempting to redeclare constructor '"
 			      << word_as_string(payload.d_func_decl->word_key)
 			      << "'. First declared at line: " << payload.d_func_decl->line_num;
 		break;
@@ -330,6 +348,38 @@ void nyla::log::err(error_tag tag, const error_payload& payload,
 	}
 	case ERR_CIRCULAR_FIELDS: {
 		std::cerr << "Circular fields found. A module has a field which references itself";
+		break;
+	}
+	case ERR_ACCESSING_FIELD_FROM_STATIC_CONTEXT: {
+		std::cerr << "Accessing a field from a static context";
+		break;
+	}
+	case ERR_FIELD_NOT_VISIBLE: {
+		std::cerr << "Field is not visible";
+		break;
+	}
+	case ERR_THIS_KEYWORD_EXPECTS_DOT_OP: {
+		std::cerr << "The 'this' keyword is expected to be followed by a '.' operator";
+		break;
+	}
+	case ERR_CANNOT_USE_THIS_KEYWORD_IN_STATIC_CONTEXT: {
+		std::cerr << "The 'this' keyword cannot be used in a static context";
+		break;
+	}
+	case ERR_THIS_KEYWORD_MUST_COME_FIRST: {
+		std::cerr << "The 'this' keyword must come first in a '.' operator";
+		break;
+	}
+	case ERR_FUNCTION_MARKED_STARTUP_HAS_PARAMS: {
+		std::cerr << "Functions marked with @StartUp annotation cannot have parameters";
+		break;
+	}
+	case ERR_FUNCTION_MARKED_STARTUP_NOT_VOID_RETURN: {
+		std::cerr << "Functions marked with @StartUp annotation must return void";
+		break;
+	}
+	case ERR_CONSTRUCTOR_MARKED_STARTUP: {
+		std::cerr << "Constructors cannot have @StartUp annotation";
 		break;
 	}
 	}

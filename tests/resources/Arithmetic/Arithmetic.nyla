@@ -1,5 +1,5 @@
 module Arithmetic {
-	public static int main() {
+	static int main() {
 		int b = 22;
 		int sum = 44 * 3 + 55 - 421 * b;
 		int g = 4;

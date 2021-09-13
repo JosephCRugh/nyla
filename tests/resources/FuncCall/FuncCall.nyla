@@ -1,9 +1,9 @@
 module FuncCall {
-	public static int main() {
+	static int main() {
 		return func(54);
 	}
 
-	public static int func(int j) {
+	static int func(int j) {
 		return 7 + j;
 	}
 }

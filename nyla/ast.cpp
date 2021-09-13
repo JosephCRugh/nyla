@@ -286,6 +286,7 @@ void nyla::acontrol::print(std::ostream& os, u32 depth) const {
 	switch (tag) {
 	case AST_BREAK:    os << indent(depth) << "break"; break;
 	case AST_CONTINUE: os << indent(depth) << "continue"; break;
+	case AST_THIS:     os << indent(depth) << "this"; break;
 	}
 }
 
@@ -373,6 +374,10 @@ nyla::aarray::~aarray() {
 void nyla::avar_object::print(std::ostream& os, u32 depth) const {
 	os << expr_header(depth) << "var" << '\n';
 	constructor_call->print(os, depth + 1);
+}
+
+void nyla::aannotation::print(std::ostream& os, u32 depth) const {
+	os << indent(depth) << "annotation: " << word_to_string(ident_key);
 }
 
 nyla::aarray_access::~aarray_access() {

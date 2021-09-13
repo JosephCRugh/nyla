@@ -33,7 +33,7 @@ module StaticVariables {
 	//                7
 	static int abc2 = abc1 + 7;
 
-	public static int main() {
+	static int main() {
 		return yyy.innerModule.c + yyy.x1 + yyy.x2 + yyy.x3 +
 			   yyy.x4[1] + abc1 + abc2 + yyy.innerModule.g[2] +
 			   a + b + c + d[1];

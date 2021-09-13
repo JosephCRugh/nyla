@@ -1,0 +1,55 @@
+module IOStream {
+	
+	private static external bool WriteFile(int*  hFile,
+	                                       char* lpBuffer,
+										   long  nNumberOfBytesToWrite,
+										   long* lpNumberOfBytesWritten,
+										   long* lpOverlapped);
+
+	private int* handle;
+
+	IOStream(int* handle) {
+		this.handle = handle;
+	}
+
+	void print(int i) {
+		// Special case since it would never enter the while loop
+		if i == 0 {
+			print("0");
+			return;
+		}
+	
+		char[20] tmpBuf = ???;
+		char[21] rBuf   = ???;
+		uint scan = 0;
+		while i > 0 {
+			tmpBuf[scan] = cast(char)(i % 10) + '0';
+			++scan;
+			i /= 10;
+		}
+		for int ri = 0; ri < scan; ++ri {
+			rBuf[scan - 1 - ri] = tmpBuf[ri];
+		}
+		print(rBuf, scan);
+	}
+
+
+	void print(char[] msg) {
+		print(msg, msg.length);
+	}
+
+	void print(char* msg, uint length) {
+		long numberOfBytesWritten;
+		WriteFile(handle, msg, length, &numberOfBytesWritten, null);
+	}
+
+	void println(char[] msg) {
+		print(msg);
+		print("\n");
+	}
+
+	void println(int i) {
+		print(i);
+		print("\n");
+	}
+}

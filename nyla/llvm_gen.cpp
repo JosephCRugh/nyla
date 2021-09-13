@@ -91,9 +91,16 @@ void nyla::llvm_generator::gen_global_initializers(sym_function* sym_main_functi
 	for (nyla::avariable_decl* global_initializer : initializer_expressions) {
 		// Need to GEP into parts of the structure!
 
-		gen_variable_decl(global_initializer, false);
+		gen_variable_decl(global_initializer);
 	}
 	m_initializing_globals = false;
+}
+
+void nyla::llvm_generator::gen_startup_function_calls(sym_function* sym_main_function,
+	                                                  const std::vector<llvm::Function*>& ll_startup_functions) {
+	for (llvm::Function* ll_startup_function : ll_startup_functions) {
+		m_llvm_builder->CreateCall(ll_startup_function);
+	}
 }
 
 void nyla::llvm_generator::gen_module(nyla::amodule* nmodule) {
@@ -212,6 +219,10 @@ void nyla::llvm_generator::gen_function_declaration(nyla::afunction* function) {
 			++param_index;
 			++ll_param_index;
 		}
+	}
+
+	if (function->sym_function->call_at_startup) {
+		m_compiler.add_startup_function(ll_function);
 	}
 
 	function->sym_function->ll_function = ll_function;
@@ -352,7 +363,7 @@ void nyla::llvm_generator::gen_function_body(nyla::afunction* function) {
 llvm::Value* nyla::llvm_generator::gen_expression(nyla::aexpr* expr) {
 	switch (expr->tag) {
 	case AST_VARIABLE_DECL:
-		return gen_variable_decl(dynamic_cast<nyla::avariable_decl*>(expr), true);
+		return gen_variable_decl(dynamic_cast<nyla::avariable_decl*>(expr));
 	case AST_RETURN:
 		return gen_return(dynamic_cast<nyla::areturn*>(expr));
 	case AST_BINARY_OP:
@@ -442,8 +453,8 @@ llvm::Value* nyla::llvm_generator::gen_expr_rvalue(nyla::aexpr* expr) {
 	return value;
 }
 
-llvm::Value* nyla::llvm_generator::gen_variable_decl(nyla::avariable_decl* variable_decl, bool allocate_decl) {
-	if (allocate_decl) {
+llvm::Value* nyla::llvm_generator::gen_variable_decl(nyla::avariable_decl* variable_decl) {
+	if (!m_initializing_globals) {
 		gen_allocation(variable_decl->sym_variable);
 	}
 	
@@ -712,7 +723,7 @@ llvm::Value* nyla::llvm_generator::gen_unary_op(nyla::aunary_op* unary_op) {
 		return dec_res;
 	}
 	case '!': {
-		return m_llvm_builder->CreateNeg(gen_expr_rvalue(unary_op->factor));
+		return m_llvm_builder->CreateNot(gen_expr_rvalue(unary_op->factor));
 	}
 	default:
 		assert(!"Unimplemented unary case");
@@ -1044,7 +1055,7 @@ llvm::Value* nyla::llvm_generator::gen_for_loop(nyla::afor_loop* for_loop) {
 	
 	// Generating declarations before entering the loop
 	for (nyla::avariable_decl* var_decl : for_loop->declarations) {
-		gen_variable_decl(var_decl, true);
+		gen_variable_decl(var_decl);
 	}
 
 	return gen_loop(dynamic_cast<nyla::aloop_expr*>(for_loop));
@@ -1119,6 +1130,11 @@ llvm::Value* nyla::llvm_generator::gen_dot_op(nyla::adot_op* dot_op) {
 	for (u32 idx = 0; idx < dot_op->factor_list.size(); idx++) {
 		nyla::aexpr* factor = dot_op->factor_list[idx];
 		switch (factor->tag) {
+		case AST_THIS: {
+			// Nothing is to be done since all work was
+			// completed during analysis for this
+			break;
+		}
 		case AST_IDENT: {
 			nyla::aident* ident = dynamic_cast<nyla::aident*>(factor);
 			if (ident->is_array_length) {
@@ -1139,7 +1155,7 @@ llvm::Value* nyla::llvm_generator::gen_dot_op(nyla::adot_op* dot_op) {
 				// Ex. a.b
 				//     ^- This
 				if (!ident->references_module) {
-					ll_location = ident->sym_variable->ll_alloc;
+					ll_location = gen_ident(ident);
 				}
 			} else {
 				// Any variable in the form   a.b, a[n].b, a().b  expects
@@ -1383,7 +1399,7 @@ llvm::Value* nyla::llvm_generator::get_arr_ptr(nyla::type* element_type, llvm::V
 	} else {
 		offset_to_data = 4 / mem_size;
 	}
-
+	
 	return m_llvm_builder->CreateGEP(arr_alloca, get_ll_uint32(offset_to_data));
 }
 

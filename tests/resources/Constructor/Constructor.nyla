@@ -1,0 +1,15 @@
+module Constructor {
+
+	int a;
+	int b;
+
+	Constructor(int a, int b) {
+		this.a = a;
+		this.b = b;
+	}
+
+	static int main() {
+		Constructor constructor = var Constructor(55, 22);
+		return constructor.a + constructor.b;
+	}
+}

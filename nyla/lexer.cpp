@@ -40,6 +40,25 @@ constexpr bool digits_set[256] = {
 		1,1,1,1,1, 1,1,1,0,0,
 };
 
+constexpr bool hexidecimal_set[256] = {
+		0,0,0,0,0, 0,0,0,0,0,
+		0,0,0,0,0, 0,0,0,0,0,
+		0,0,0,0,0, 0,0,0,0,0,
+		0,0,0,0,0, 0,0,0,0,0,
+		// 0..9
+		0,0,0,0,0, 0,0,0,1,1,
+		1,1,1,1,1, 1,1,1,0,0, // << 59
+		// A-Z   64-90
+		0,0,0,0,1, 1,1,1,1,1, // << 69
+		1,1,1,1,1, 1,1,1,1,1, // << 79
+		1,1,1,1,1, 1,1,1,1,1, // << 89
+		// a-z   97-122
+		1,0,0,0,0, 0,0,1,1,1, // << 99
+		1,1,1,1,1, 1,1,1,1,1, // << 109
+		1,1,1,1,1, 1,1,1,1,1, // << 119
+		1,1,1,
+};
+
 constexpr bool eof_eol_set[256] = {
 	// '\0'                       '\n'
 		1,   0,0,0, 0,0,0,0, 0,0,  1,  0,
@@ -318,6 +337,13 @@ case fst: {                              \
 }
 
 nyla::token nyla::lexer::next_number() {
+	// Checking for hexidecimal
+	if (m_source.cur_char() == '0' && m_source.peek_char() == 'x') {
+		m_source.next_char(); // Eating '0'
+		m_source.next_char(); // Eating 'x'
+		return next_hexidecimal();
+	}
+
 	range digits_before_dot = read_unsigned_digits();
 	range fraction_digits = { 0, 0 };
 	range exponent_digits = { 0, 0 };
@@ -378,6 +404,63 @@ nyla::token nyla::lexer::next_integer(const nyla::range& digits) {
 		m_log.err(ERR_INT_TOO_LARGE, int_token);
 		return int_token;
 	}
+
+	return finalize_integer(int_value);
+}
+
+nyla::range nyla::lexer::read_hexidecimal_digits() {
+	// TODO: probably should abstract the ability to read
+	// a range of values from a set into a common function
+	// since the same logic will apply to base-10, hex, octal
+	// and binary
+	u32 start = m_source.position();
+	c8 ch = m_source.cur_char();
+	while (hexidecimal_set[ch]) {
+		ch = m_source.next_char();
+	}
+	u32 end = m_source.position();
+	return range{ start, end };
+}
+
+// Mapping hex characters to numbers
+std::unordered_map<c8, u64> hex_to_decimal_mapping =
+{
+	{ '0', 0  }, { '1', 1  }, { '2', 2  }, { '3', 3  }, { '4', 4  },
+	{ '5', 5  }, { '6', 6  }, { '7', 7  }, { '8', 8  }, { '9', 9  },
+	{ 'a', 10 }, { 'b', 11 }, { 'c', 12 }, { 'd', 13 }, { 'e', 14 },
+	{ 'f', 15 },
+	{ 'A', 10 }, { 'B', 11 }, { 'C', 12 }, { 'D', 13 }, { 'E', 14 },
+	{ 'F', 15 },
+};
+
+nyla::token nyla::lexer::next_hexidecimal() {
+	nyla::range digits = read_hexidecimal_digits();
+
+
+	if (digits.length() == 0) {
+		// TODO: produce an error!
+	}
+
+	nyla::token int_token;
+
+	u64 int_value = 0;
+	u64 prev_value = -1;
+	bool overflow = false;
+	for (ulen index = digits.start; index < digits.end; index++) {
+		prev_value = int_value;
+		int_value <<= 4;
+		int_value += hex_to_decimal_mapping[m_source[index]];
+		if (int_value < prev_value) {
+			// TODO: error production?
+		}
+	}
+
+	return finalize_integer(int_value);
+}
+
+nyla::token nyla::lexer::finalize_integer(u64 int_value) {
+
+	nyla::token int_token;
 
 	// Maximum signed 32-bit integer
 	if (int_value <= std::numeric_limits<s32>::max()) {

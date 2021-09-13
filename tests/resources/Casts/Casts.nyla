@@ -1,5 +1,5 @@
 module Casts {
-	public static int main() {
+	static int main() {
 		byte b = cast(byte) 5;
 		short c = cast(short) b + 3;
 		int a = cast(int) c + b;

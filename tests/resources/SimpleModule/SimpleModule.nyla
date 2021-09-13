@@ -3,7 +3,7 @@ module Abc {
 	int a;
 	int b;
 
-	public static int main() {
+	static int main() {
 	
 		Abc y = var Abc();
 		y.a = 55;

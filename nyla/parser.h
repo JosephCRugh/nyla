@@ -45,7 +45,7 @@ namespace nyla {
 		nyla::type_info parse_type();
 
 		// function := ident '(' (var_decl ',')* var_decl?  ')' '{' stmts '}'
-		nyla::afunction* parse_function(u32 mods, const nyla::type_info& return_type_info);
+		nyla::afunction* parse_function(bool is_constructor, nyla::aannotation* annotation, u32 mods, const nyla::type_info& return_type_info);
 
 		// variable_decl := modifiers type ident
 		nyla::avariable_decl* parse_variable_decl(u32 mods,
@@ -72,6 +72,9 @@ namespace nyla {
 
 		// stmt := 
 		void parse_stmt(std::vector<nyla::aexpr*>& stmts);
+
+		// annotation := '@' ident
+		nyla::aannotation* parse_annotation();
 
 		// return := return expr? semis
 		nyla::aexpr* parse_return();

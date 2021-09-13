@@ -104,9 +104,9 @@ namespace nyla {
 		TK_STATIC,
 		TK_PRIVATE,
 		TK_PROTECTED,
-		TK_PUBLIC,
 		TK_EXTERNAL,
 		TK_CONST,
+		TK_COMPTIME,
 		TK_IMPORT,
 
 		TK_IDENTIFIER,
@@ -114,6 +114,7 @@ namespace nyla {
 		TK_NULL,
 		TK_NEW,
 		TK_VAR,
+		TK_THIS,
 
 		TK_EOF
 
@@ -136,6 +137,9 @@ namespace nyla {
 
 	// The word "length" for identifying array lengths.
 	extern u32 length_ident;
+
+	// The word "StatUp" for identifying @StartUp annotations
+	extern u32 startup_ident;
 
 	// Initialize the reserved_words set
 	void setup_tokens();

@@ -1,13 +1,13 @@
 module FunctionOverloading {
-	public static int func(int some_value) {
+	static int func(int some_value) {
 		return 77;
 	}
 
-	public static int func(byte some_value) {
+	static int func(byte some_value) {
 		return 88;
 	}
 
-	public static int main() {
+	static int main() {
 		return func(1) + func(cast(byte) 2);
 	}
 }

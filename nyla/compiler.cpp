@@ -14,10 +14,14 @@
 
 llvm::LLVMContext* nyla::llvm_context = nullptr;
 
-nyla::compiler::compiler(u32 flags) : m_flags(flags) {
+nyla::compiler::compiler() {
 	nyla::llvm_context = new llvm::LLVMContext;
 	m_llvm_module      = new llvm::Module("Nyla Module", *nyla::llvm_context);
 	nyla::setup_tokens();
+}
+
+void nyla::compiler::set_flags(u32 flags) {
+	m_flags = flags;
 	if (m_flags & COMPFLAGS_VERBOSE) {
 		m_flags |= COMPFLAGS_VERBOSE;
 		m_flags |= COMPFLAG_DISPLAY_AST;
@@ -27,8 +31,15 @@ nyla::compiler::compiler(u32 flags) : m_flags(flags) {
 	}
 }
 
-void nyla::compiler::compile(const std::vector<std::string>& src_directories) {
-	assert(!src_directories.empty());
+void nyla::compiler::compile(const std::vector<std::string>& src_directories, const std::string& main_function_path) {
+	assert(!main_function_path.empty());
+	
+	if (main_function_path.empty()) {
+		m_log.global_error(ERR_FILE_WITH_MAIN_FUNCTION_EMPTY);
+		return;
+	}
+
+	m_main_function_file = main_function_path;
 
 	init_llvm_native_target();
 
@@ -66,6 +77,7 @@ void nyla::compiler::compile(const std::vector<std::string>& src_directories) {
 
 	nyla::llvm_generator generator(*this, m_llvm_module, nullptr, false);
 	generator.gen_global_initializers(m_main_function, m_global_initializer_exprs);
+	generator.gen_startup_function_calls(m_main_function, m_startup_functions);
 
 	if (llvm::verifyModule(*m_llvm_module, &llvm::errs())) {
 		return;
@@ -162,9 +174,8 @@ void nyla::compiler::add_global_initialize_expr(nyla::avariable_decl* expr) {
 	m_global_initializer_exprs.push_back(expr);
 }
 
-void nyla::compiler::set_main_function_file(const std::string& main_function_path) {
-	m_main_function_file     = main_function_path;
-	m_main_function_file_set = true;
+void nyla::compiler::add_startup_function(llvm::Function* ll_startup_function) {
+	m_startup_functions.push_back(ll_startup_function);
 }
 
 void nyla::compiler::set_executable_name(const std::string& executable_name) {
@@ -206,13 +217,9 @@ void nyla::compiler::collect_source_files(const std::string& directory,
 			}
 
 			sym_table* new_sym_table = new sym_table;
-			if (!m_main_function_file_set) {
-				new_sym_table->m_search_for_main_function = true;
-			} else {
-				new_sym_table->m_search_for_main_function =
-					m_main_function_file == file_location.internal_path;
-			}
-			
+			new_sym_table->m_search_for_main_function =
+				m_main_function_file == file_location.internal_path;
+
 			new_sym_table->set_file_location(file_location);
 			m_sym_tables[file_location.internal_path] = new_sym_table;
 			source_files.push_back(file_location);
@@ -221,13 +228,37 @@ void nyla::compiler::collect_source_files(const std::string& directory,
 }
 
 void nyla::compiler::process_files(std::vector<file_location>& source_files) {
-	for (file_location& source_file : source_files) {
-		// TODO: Could have table lookup by just passing the table with
-		// the file location
-		sym_table* sym_table = m_sym_tables[source_file.internal_path];
-		if (sym_table->m_started_processing) continue;
-		process_file(source_file, sym_table);
+	auto it = m_sym_tables.find(m_main_function_file);
+	if (it == m_sym_tables.end()) {
+		m_log.global_error(ERR_FILE_WITH_MAIN_FUNCTION_DOES_NOT_EXIST,
+			               error_payload::string({ m_main_function_file }));
+		m_found_compilation_errors = true;
+		return;
 	}
+
+	// Parsing all files that depend on the file
+	// with the main function and creating llvm ir
+	sym_table* main_file_sym_table = it->second;
+	file_location source_file = main_file_sym_table->get_file_location();
+	process_file(source_file, main_file_sym_table);
+
+	u32 save_flags = m_flags;
+	// Making sure no object code is generated
+	if (should_analyze()) {
+		m_flags = COMPFLAG_ONLY_PARSE_AND_ANALYZE;
+	}
+
+	// Parsing the rest of the files but since they do
+	// not depend on the main file there is no reason
+	// to fully process them
+	for (file_location& source_file : source_files) {
+		sym_table* sym_table = m_sym_tables[source_file.internal_path];
+		if (!sym_table->m_started_processing) {
+			process_file(source_file, sym_table);
+		}
+	}
+
+	m_flags = save_flags;
 }
 
 void nyla::compiler::process_file(const file_location& source_file, sym_table* our_sym_table) {
@@ -351,6 +382,8 @@ our_sym_table->m_found_compilation_errors = true; \
 	// Analyzing
 	//////////////////////////////
 
+	if (!should_analyze()) return;
+
 	// It is possible the file was already
 	// analyzed by a dependency file
 	if (!our_sym_table->m_started_analysis) {
@@ -379,6 +412,9 @@ our_sym_table->m_found_compilation_errors = true; \
 	//////////////////////////////
 	// Gen LLVM IR Declarations
 	//////////////////////////////
+
+	if (!should_gen_obj_code()) return;
+
 	if (!our_sym_table->m_started_ir_declaration_gen) {
 		our_sym_table->m_started_ir_declaration_gen = true;
 		llvm_generator.gen_declarations();

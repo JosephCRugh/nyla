@@ -15,7 +15,16 @@ nyla::sym_module* nyla::sym_table::find_module(u32 name_key) {
 
 s32 nyla::sym_table::has_function_been_declared(sym_module* sym_module, u32 name_key,
 	                                             std::vector<nyla::type*> param_types) {
-	std::vector<sym_function*>& functions = sym_module->functions[name_key];
+	return function_search(sym_module->functions[name_key], name_key, param_types);
+}
+
+s32 nyla::sym_table::has_constructor_been_declared(sym_module* sym_module, u32 name_key,
+	                                               std::vector<nyla::type*> param_types) {
+	return function_search(sym_module->constructors[name_key], name_key, param_types);
+}
+
+s32 nyla::sym_table::function_search(const std::vector<sym_function*>& functions, u32 name_key,
+	                                 std::vector<nyla::type*> param_types) {
 	for (sym_function* function : functions) {
 		if (function->name_key != name_key) continue;
 		if (function->param_types.size() != param_types.size()) continue;
@@ -36,6 +45,12 @@ nyla::sym_function* nyla::sym_table::enter_function(sym_module* sym_module, u32 
 	std::vector<sym_function*>& functions = sym_module->functions[name_key];
 	functions.push_back(new sym_function);
 	return functions.back();
+}
+
+nyla::sym_function* nyla::sym_table::enter_constructor(sym_module* sym_module, u32 name_key) {
+	std::vector<sym_function*>& constructors = sym_module->constructors[name_key];
+	constructors.push_back(new sym_function);
+	return constructors.back();
 }
 
 bool nyla::sym_table::has_variable_been_declared(u32 name_key, bool check_module_scope) {

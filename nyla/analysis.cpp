@@ -24,17 +24,24 @@ void nyla::analysis::check_module(nyla::amodule* nmodule) {
 	nmodule->literal_constant = false;
 	m_sym_module = nmodule->sym_module;
 	m_sym_scope  = nmodule->sym_scope;
+	m_checking_fields = true;
 	for (nyla::avariable_decl* field : nmodule->fields) {
 		check_expression(field);
 		if (field->type->is_module()) {
 			check_circular_fields(field, field->type->sym_module, nmodule->sym_module->unique_module_id);
 		}
 	}
+	m_checking_fields = false;
+	m_checking_globals = true;
 	for (nyla::avariable_decl* global : nmodule->globals) {
 		check_expression(global);
 	}
+	m_checking_globals = false;
 	for (nyla::afunction* function : nmodule->functions) {
 		check_function(function);
+	}
+	for (nyla::afunction* constructor : nmodule->constructors) {
+		check_function(constructor);
 	}
 	m_sym_scope = m_sym_scope->parent;
 }
@@ -89,9 +96,17 @@ void nyla::analysis::check_expression(nyla::aexpr* expr) {
 	case AST_UNARY_OP:
 		check_unary_op(dynamic_cast<nyla::aunary_op*>(expr));
 		break;
-	case AST_IDENT:
-		check_ident(m_sym_scope, dynamic_cast<nyla::aident*>(expr));
+	case AST_IDENT: {
+		bool static_context = true;
+		if (m_function) {
+			static_context = m_function->sym_function->mods & MOD_STATIC;
+		}
+		if (m_checking_fields) {
+			static_context = false;
+		}
+		check_ident(static_context, m_sym_scope, dynamic_cast<nyla::aident*>(expr));
 		break;
+	}
 	case AST_FOR_LOOP:
 		check_for_loop(dynamic_cast<nyla::afor_loop*>(expr));
 		break;
@@ -114,9 +129,14 @@ void nyla::analysis::check_expression(nyla::aexpr* expr) {
 		check_function_call(static_context, m_sym_module, dynamic_cast<nyla::afunction_call*>(expr), false);
 		break;
 	}
-	case AST_ARRAY_ACCESS:
-		check_array_access(m_sym_scope, dynamic_cast<nyla::aarray_access*>(expr));
+	case AST_ARRAY_ACCESS: {
+		bool static_context = true;
+		if (m_function) {
+			static_context = m_function->sym_function->mods & MOD_STATIC;
+		}
+		check_array_access(static_context, m_sym_scope, dynamic_cast<nyla::aarray_access*>(expr));
 		break;
+	}
 	case AST_ARRAY:
 		check_array(dynamic_cast<nyla::aarray*>(expr));
 		break;
@@ -125,6 +145,10 @@ void nyla::analysis::check_expression(nyla::aexpr* expr) {
 		break;
 	case AST_DOT_OP:
 		check_dot_op(dynamic_cast<nyla::adot_op*>(expr));
+		break;
+	case AST_THIS:
+		m_log.err(ERR_THIS_KEYWORD_EXPECTS_DOT_OP, expr);
+		expr->type = nyla::types::type_error;
 		break;
 	case AST_IF:
 		check_if(dynamic_cast<nyla::aif*>(expr));
@@ -175,6 +199,11 @@ void nyla::analysis::check_variable_decl(nyla::avariable_decl* variable_decl) {
 		if (!variable_decl->assignment->comptime_compat) {
 			variable_decl->comptime_compat = false;
 		}
+
+		if (variable_decl->assignment->type == nyla::types::type_error) {
+			variable_decl->type = nyla::types::type_error;
+			return;
+		}
 	}
 
 	if (variable_decl->type->is_arr()) {
@@ -216,12 +245,17 @@ void nyla::analysis::check_variable_decl(nyla::avariable_decl* variable_decl) {
 			nyla::abinary_op* assignment = dynamic_cast<nyla::abinary_op*>(variable_decl->assignment);
 			if (assignment->rhs->tag == AST_ARRAY || assignment->rhs->type == nyla::types::type_string) {
 
+				bool sizes_match;
 				if (assignment->rhs->tag == AST_ARRAY) {
 					nyla::aarray* arr = dynamic_cast<nyla::aarray*>(assignment->rhs);
-					compare_arr_size(arr, variable_decl->sym_variable->computed_arr_dim_sizes);
+					sizes_match = compare_arr_size(arr, variable_decl->sym_variable->computed_arr_dim_sizes);
 				} else {
 					nyla::astring* str = dynamic_cast<nyla::astring*>(assignment->rhs);
-					compare_arr_size(str, variable_decl->sym_variable->computed_arr_dim_sizes);
+					sizes_match = compare_arr_size(str, variable_decl->sym_variable->computed_arr_dim_sizes);
+				}
+				if (!sizes_match) {
+					variable_decl->type = nyla::types::type_error;
+					return;
 				}
 			}
 		}
@@ -500,17 +534,41 @@ void nyla::analysis::check_unary_op(nyla::aunary_op* unary_op) {
 	}
 }
 
-void nyla::analysis::check_ident(sym_scope* lookup_scope, nyla::aident* ident) {
+void nyla::analysis::check_ident(bool static_context, sym_scope* lookup_scope, nyla::aident* ident) {
 	ident->literal_constant = false;
 
 	// Assumed a variable at this point
 	ident->sym_variable = m_sym_table->find_variable(lookup_scope, ident->ident_key);
 	if (ident->sym_variable) {
-		if (ident->spos < ident->sym_variable->position_declared_at) {
-			m_log.err(ERR_USE_OF_VARIABLE_BEFORE_DECLARATION,
-				      error_payload::word(ident->ident_key),
-				      ident);
+
+		// This is only relevent if the variable is not a field/global
+		if (!(ident->sym_variable->is_field || ident->sym_variable->is_global)) {
+			if (ident->spos < ident->sym_variable->position_declared_at) {
+				m_log.err(ERR_USE_OF_VARIABLE_BEFORE_DECLARATION,
+					error_payload::word(ident->ident_key),
+					ident);
+			}
 		}
+		
+		if (static_context) {
+			if (ident->sym_variable->is_field) {
+				m_log.err(ERR_ACCESSING_FIELD_FROM_STATIC_CONTEXT, ident);
+			}
+		}
+
+		if (ident->sym_variable->sym_module != m_sym_module) {
+			// Accessing an identifier in another module so have
+			// to check the access modifiers
+			switch (ident->sym_variable->mods & nyla::ACCESS_MODS) {
+			case MOD_PRIVATE: {
+				m_log.err(ERR_FIELD_NOT_VISIBLE, ident);
+				break;
+			}
+			case MOD_PROTECTED: break; // TODO
+			default: break; // Default public
+			}
+		}
+
 		ident->type = ident->sym_variable->type;
 	} else {
 		m_log.err(ERR_UNDECLARED_VARIABLE,
@@ -605,13 +663,17 @@ void nyla::analysis::check_function_call(bool static_call,
 		}
 	}
 
-	// TODO: make sure the user has the right access modifiers to
-	// make the call
-	switch (matched_function->mods & nyla::ACCESS_MODS) {
-	case MOD_PUBLIC:    break;
-	case MOD_PROTECTED: break;
-	case MOD_PRIVATE:   break;
-	default:            break;
+	// Accessing outside of the module so have to check
+	// access modifiers
+	if (matched_function->sym_module != m_sym_module) {
+		switch (matched_function->mods & nyla::ACCESS_MODS) {
+		case MOD_PRIVATE: {
+			m_log.err(ERR_FUNCTION_NOT_VISIBLE, function_call);
+			break;
+		}
+		case MOD_PROTECTED: break; // TODO
+		default:            break; // Defaults to public
+		}
 	}
 
 	check_function_call(matched_function, function_call);
@@ -674,10 +736,10 @@ void nyla::analysis::check_function_call(sym_function* called_function,
 	function_call->literal_constant = called_has_comptime;
 }
 
-void nyla::analysis::check_array_access(sym_scope* lookup_scope, nyla::aarray_access* array_access) {
+void nyla::analysis::check_array_access(bool static_context, sym_scope* lookup_scope, nyla::aarray_access* array_access) {
 	array_access->literal_constant = false;
 
-	check_ident(lookup_scope, array_access->ident);
+	check_ident(static_context, lookup_scope, array_access->ident);
 	if (array_access->ident->type == nyla::types::type_error) {
 		array_access->type = nyla::types::type_error;
 		return;
@@ -795,7 +857,7 @@ void nyla::analysis::check_dot_op(nyla::adot_op* dot_op) {
 
 	sym_scope*  ref_scope  = m_sym_scope;
 	sym_module* ref_module = m_sym_module;
-	bool static_context = true; // False when inside member function?
+	bool static_context = !m_function->sym_function->is_member_function();
 	for (u32 idx = 0; idx < dot_op->factor_list.size(); idx++) {
 		nyla::aexpr*  factor = dot_op->factor_list[idx];
 		u32 factor_name_key;
@@ -823,17 +885,14 @@ void nyla::analysis::check_dot_op(nyla::adot_op* dot_op) {
 				}
 			}
 
-			// TODO: Fix issues in which the user wants
-			// to reference static fields but is not
-			// accessing them from a static context
-			check_ident(ref_scope, ident);
+			check_ident(static_context, ref_scope, ident);
 			factor_name_key = ident->ident_key;
 
 			break;
 		}
 		case AST_ARRAY_ACCESS: {
 			nyla::aarray_access* array_access = dynamic_cast<nyla::aarray_access*>(factor);
-			check_array_access(ref_scope, array_access);
+			check_array_access(static_context, ref_scope, array_access);
 			factor_name_key = array_access->ident->ident_key;
 			break;
 		}
@@ -842,6 +901,21 @@ void nyla::analysis::check_dot_op(nyla::adot_op* dot_op) {
 			check_function_call(static_context, ref_module, function_call, false);
 			factor_name_key = function_call->name_key;
 			break;
+		}
+		case AST_THIS: {
+			if (static_context) {
+				m_log.err(ERR_CANNOT_USE_THIS_KEYWORD_IN_STATIC_CONTEXT, factor);
+				dot_op->type = nyla::types::type_error;
+				return;
+			}
+			if (idx != 0) {
+				m_log.err(ERR_THIS_KEYWORD_MUST_COME_FIRST, factor);
+				dot_op->type = nyla::types::type_error;
+				return;
+			}
+			// Look up variables in the module scope
+			ref_scope = m_sym_module->scope;
+			continue; // Continue to next factor
 		}
 		default: {
 			m_log.err(ERR_DOT_OP_EXPECTS_VARIABLE, factor);
@@ -969,8 +1043,6 @@ void nyla::analysis::check_scope(const std::vector<nyla::aexpr*>& stmts, bool& c
  */
 
 bool nyla::analysis::is_assignable_to(nyla::type* to, nyla::type* from) {
-	// TODO: arrays need to have the elements checked!
-
 	switch (to->tag) {
 		// is_int()
 	case TYPE_BYTE:
@@ -1058,13 +1130,40 @@ void nyla::analysis::attempt_assignment(nyla::type* to_type, nyla::aexpr*& value
 	if (value_type == nyla::types::type_string) {
 		// Strings become the type they are being set to
 		value->type = to_type;
-	} else if (value_type->is_arr()) {
+	} else if (value_type->is_arr() && to_type->is_arr()) {
+		if (value->tag == AST_ARRAY) {
+			// Checking to make sure that the elements of the array are assignable
+			// to the destination array. If they are then cast will be added where
+			// needed
+			attempt_array_assignment(to_type->get_base_type(), dynamic_cast<nyla::aarray*>(value));
+		}
+		
 		value->type->set_base_type(to_type->get_base_type());
 	} else if (value_type == nyla::types::type_null) {
 		value->type = to_type; // Replacing null type with the type of the pointer
 	} else if (value_type != to_type) {
 		value = make_cast(value, to_type);
 	}
+}
+
+bool nyla::analysis::attempt_array_assignment(nyla::type* to_element_type, nyla::aarray* arr) {
+	for (nyla::aexpr*& element : arr->elements) {
+		if (element->tag == AST_ARRAY) {
+			if (!attempt_array_assignment(to_element_type, dynamic_cast<nyla::aarray*>(element))) {
+				return false;
+			}
+		} else {
+			if (is_assignable_to(to_element_type, element->type)) {
+				attempt_assignment(to_element_type, element);
+			} else {
+				m_log.err(ERR_ELEMENT_OF_ARRAY_NOT_COMPATIBLE_WITH_ARRAY,
+					      error_payload::types({ to_element_type, element->type }),
+					      element);
+				return false;
+			}
+		}
+	}
+	return true;
 }
 
 bool nyla::analysis::is_lvalue(nyla::aexpr* expr) {
@@ -1080,22 +1179,26 @@ bool nyla::analysis::is_lvalue(nyla::aexpr* expr) {
 	return true;
 }
 
-void nyla::analysis::compare_arr_size(nyla::aarray* arr,
+bool nyla::analysis::compare_arr_size(nyla::aarray* arr,
 	                                  const std::vector<u32>& computed_arr_dim_sizes,
 	                                  u32 depth) {
 	if (arr->elements.size() > computed_arr_dim_sizes[depth]) {
 		m_log.err(ERR_ARR_TOO_MANY_INIT_VALUES, arr);
+		return false;
 	}
 	arr->dim_size = computed_arr_dim_sizes[depth];
 	if (arr->type->element_type->tag == TYPE_ARR) {
 		for (nyla::aexpr* element : arr->elements) {
 			nyla::aarray* arr_element = dynamic_cast<nyla::aarray*>(element);
-			compare_arr_size(arr_element, computed_arr_dim_sizes, depth + 1);
+			if (!compare_arr_size(arr_element, computed_arr_dim_sizes, depth + 1)) {
+				return false;
+			}
 		}
 	}
+	return true;
 }
 
-void nyla::analysis::compare_arr_size(nyla::astring* str,
+bool nyla::analysis::compare_arr_size(nyla::astring* str,
 	                                  const std::vector<u32>& computed_arr_dim_sizes,
 	                                  u32 depth) {
 	// TODO: only comparing against 8 bit strings
@@ -1103,4 +1206,5 @@ void nyla::analysis::compare_arr_size(nyla::astring* str,
 		m_log.err(ERR_ARR_TOO_MANY_INIT_VALUES, str);
 	}
 	str->dim_size = computed_arr_dim_sizes[depth];
+	return true;
 }

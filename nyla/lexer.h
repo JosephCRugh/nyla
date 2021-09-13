@@ -38,10 +38,15 @@ namespace nyla {
 		nyla::token next_number();
 		nyla::range read_unsigned_digits();
 		nyla::token next_integer(const nyla::range& digits);
+		nyla::range read_hexidecimal_digits();
+		nyla::token next_hexidecimal();
+		nyla::token finalize_integer(u64 int_value);
 		nyla::token next_float(const range& whole_digits,
 			                   const range& fraction_digits,
 			                   const range& exponent_digits,
 			                   c8 exponent_sign);
+
+
 		// Calculate an integer value based on a range of digits
 		// @returns the computed value and a boolean to indicate if
 		//          there was overflow

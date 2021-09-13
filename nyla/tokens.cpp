@@ -7,6 +7,7 @@ std::unordered_map<u32, u32> nyla::reserved_tag_to_words;
 u32 nyla::unidentified_ident;
 u32 nyla::main_ident;
 u32 nyla::length_ident;
+u32 nyla::startup_ident;
 
 void nyla::setup_tokens() {
 	reserved_words = {
@@ -44,19 +45,21 @@ void nyla::setup_tokens() {
 		{ nyla::word::make("static")   , nyla::TK_STATIC      },
 		{ nyla::word::make("private")  , nyla::TK_PRIVATE     },
 		{ nyla::word::make("protected"), nyla::TK_PROTECTED   },
-		{ nyla::word::make("public")   , nyla::TK_PUBLIC      },
 		{ nyla::word::make("external") , nyla::TK_EXTERNAL    },
 		{ nyla::word::make("const")    , nyla::TK_CONST       },
+		{ nyla::word::make("comptime") , nyla::TK_COMPTIME    },
 		{ nyla::word::make("cast")     , nyla::TK_CAST        },
 		{ nyla::word::make("null")     , nyla::TK_NULL        },
 		{ nyla::word::make("new")      , nyla::TK_NEW         },
 		{ nyla::word::make("var")      , nyla::TK_VAR         },
 		{ nyla::word::make("import")   , nyla::TK_IMPORT      },
+		{ nyla::word::make("this")     , nyla::TK_THIS        },
 	};
 
-	unidentified_ident = nyla::word::make("__unidentified_ident");
-	main_ident         = nyla::word::make("main");
-	length_ident       = nyla::word::make("length");
+	unidentified_ident  = nyla::word::make("__unidentified_ident");
+	main_ident          = nyla::word::make("main");
+	length_ident        = nyla::word::make("length");
+	nyla::startup_ident = nyla::word::make("StartUp");
 
 	for (auto it = reserved_words.begin(); it != reserved_words.end(); it++) {
 		reserved_tag_to_words[it->second] = it->first;

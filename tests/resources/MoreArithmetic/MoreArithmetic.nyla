@@ -1,5 +1,5 @@
 module MoreArithmetic {
-	public static int main() {
+	static int main() {
 		int a = 22;
 		int b = a << 6;
 		int c = b % 20;

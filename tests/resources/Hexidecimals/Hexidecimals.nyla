@@ -1,0 +1,5 @@
+module Hexidecimals {
+	static int main() {
+		return 0xFFF00FAB + 0xccccCCcc + 0x0 + 0x0013FC;
+	}
+}

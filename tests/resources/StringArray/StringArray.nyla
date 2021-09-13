@@ -1,6 +1,6 @@
 module StringArray {
 
-	public static int main() {
+	static int main() {
 		char[] myString = "Hello World!";
 		
 		int sum = 0;

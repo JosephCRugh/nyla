@@ -1,0 +1,14 @@
+
+/*
+ * Includes helpful functions for working with
+ * low level bits of numeric values
+ */
+module Bits {
+
+	/*
+	 * Combines two integers into a long
+	 */
+	static long joinInts(int low, int high) {
+		return ((cast(long) high) << 32) | ((0x000000000FFFFFFFF) & cast(long) low);
+	}
+}

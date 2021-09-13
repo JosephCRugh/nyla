@@ -28,6 +28,8 @@ namespace nyla {
 		AST_IF,
 		AST_BREAK,
 		AST_CONTINUE,
+		AST_THIS,
+		AST_ANNOTATION,
 
 		// Expressions
 		
@@ -111,6 +113,7 @@ namespace nyla {
 	struct aarray;
 	struct aimport;
 	struct aident;
+	struct aannotation;
 
 	/*
 	 * Node that represents the contents
@@ -171,8 +174,8 @@ namespace nyla {
 		std::vector<nyla::avariable_decl*> parameters;
 		std::vector<nyla::aexpr*>          stmts;
 		bool                               is_constructor = false;
-		nyla::sym_scope*                   sym_scope = nullptr;
-
+		nyla::sym_scope*                   sym_scope  = nullptr;
+		
 		// Constructors use this to reference field declarations
 		nyla::amodule* nmodule = nullptr;
 		
@@ -399,6 +402,14 @@ namespace nyla {
 		std::u32string lit32;
 		u32            dim_size; // Since strings are just arrays and the size
 		                         // could be modified by default initialization
+
+		virtual void print(std::ostream& os, u32 depth) const override;
+	};
+
+	struct aannotation : public ast_node {
+		virtual ~aannotation() override {};
+
+		u32 ident_key;
 
 		virtual void print(std::ostream& os, u32 depth) const override;
 	};

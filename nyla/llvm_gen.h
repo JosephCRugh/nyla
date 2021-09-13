@@ -33,8 +33,10 @@ namespace nyla {
 
 		void gen_declarations();
 
-		void nyla::llvm_generator::gen_global_initializers(sym_function* sym_main_function,
-			                                               const std::vector<nyla::avariable_decl*>& initializer_expressions);
+		void gen_global_initializers(sym_function* sym_main_function,
+			                         const std::vector<nyla::avariable_decl*>& initializer_expressions);
+		void gen_startup_function_calls(sym_function* sym_main_function,
+			                            const std::vector<llvm::Function*>& ll_startup_functions);
 
 		void gen_module(nyla::amodule* nmodule);
 
@@ -50,7 +52,7 @@ namespace nyla {
 		// will load those values
 		llvm::Value* gen_expr_rvalue(nyla::aexpr* expr);
 
-		llvm::Value* gen_variable_decl(nyla::avariable_decl* variable_decl, bool allocate_decl);
+		llvm::Value* gen_variable_decl(nyla::avariable_decl* variable_decl);
 		
 		llvm::Value* gen_return(nyla::areturn* ret);
 

@@ -31,7 +31,6 @@ case TK_TYPE_VOID:
 case TK_STATIC:               \
 case TK_PRIVATE:              \
 case TK_PROTECTED:            \
-case TK_PUBLIC:               \
 case TK_EXTERNAL:             \
 case TK_CONST:
 
@@ -150,6 +149,8 @@ bool nyla::parser::parse_import() {
 	sym_table* sym_table = m_compiler.find_sym_table(nimport->path);
 	if (!sym_table) {
 		m_log.err(ERR_CANNOT_FIND_IMPORT, nimport);
+	} else if (sym_table == m_sym_table) {
+		m_log.err(ERR_CANNOT_IMPORT_SELF, nimport);
 	}
 
 	m_file_unit->imports[file_path] = nimport;
@@ -313,52 +314,71 @@ nyla::amodule* nyla::parser::parse_module() {
 	nmodule->sym_module->scope = nmodule->sym_scope;
 	nmodule->sym_scope->is_module_scope = true;
 	u32 field_count = 0;
+	u32 stmt_mods = 0;
+	nyla::aannotation* annotation = nullptr;
 	match('{');
 	while (m_current.tag != '}' && m_current.tag != TK_EOF) {
 		switch (m_current.tag) {
-			TYPE_START_CASES
-			MODIFIERS_START_CASES
-			case TK_IDENTIFIER: {
-				u32 mods         = parse_modifiers();
-				const type_info& type = parse_type();
+		case '@': // Annotation start
+		MODIFIERS_START_CASES
+		case TK_IDENTIFIER: {
+			annotation = parse_annotation();
+			stmt_mods = parse_modifiers();
+			// Checking for constructor first
+			if (m_current.word_key == nmodule->name_key) {
+				// Still have to peek because it could be a static
+				// variable declaration of the module
 				if (peek_token(1).tag == '(') {
-					// Assumed a function declaration
-					nmodule->functions.push_back(parse_function(mods, type));
-				} else {
-					// Assumed a variable declaration
-					nyla::aident* ident = make<nyla::aident>(AST_IDENT, m_current);
-					ident->ident_key    = parse_identifier();
-					m_field_mode = true;
-					nyla::avariable_decl* var_decl = parse_variable_decl(mods, type, ident, true);
-					u32 last = nmodule->fields.size();
-					bool is_static = mods & MOD_STATIC;
-					if (is_static) {
-						parse_assignment_list(var_decl, nmodule->globals, true);
-					} else {
-						parse_assignment_list(var_decl, nmodule->fields, true);
-					}
-					m_field_mode = false;
-					if (!is_static) {
-						for (u32 i = last; i < nmodule->fields.size(); i++) {
-							nyla::avariable_decl* field = nmodule->fields[i];
-							field->sym_variable->is_field = true;
-							field->sym_variable->field_index = field_count++;
-							nmodule->sym_module->fields.push_back(field);
-						}
-					}
-					parse_semis();
+					// Assumed constructor declaration
+					nmodule->constructors.push_back(parse_function(true, annotation, stmt_mods, {}));
+					break;
 				}
-				break;
 			}
-			case ';': {
+			// Else treat as variable or function call
+			goto start_of_types;
+		}
+		TYPE_START_CASES {
+			stmt_mods = 0;
+			start_of_types:
+			const type_info& type = parse_type();
+			if (peek_token(1).tag == '(') {
+				// Assumed a function declaration
+				nmodule->functions.push_back(parse_function(false, annotation, stmt_mods, type));
+			} else {
+				// Assumed a variable declaration
+				nyla::aident* ident = make<nyla::aident>(AST_IDENT, m_current);
+				ident->ident_key    = parse_identifier();
+				m_field_mode = true;
+				nyla::avariable_decl* var_decl = parse_variable_decl(stmt_mods, type, ident, true);
+				u32 last = nmodule->fields.size();
+				bool is_static = stmt_mods & MOD_STATIC;
+				if (is_static) {
+					parse_assignment_list(var_decl, nmodule->globals, true);
+				} else {
+					parse_assignment_list(var_decl, nmodule->fields, true);
+				}
+				m_field_mode = false;
+				if (!is_static) {
+					for (u32 i = last; i < nmodule->fields.size(); i++) {
+						nyla::avariable_decl* field = nmodule->fields[i];
+						field->sym_variable->is_field = true;
+						field->sym_variable->field_index = field_count++;
+						nmodule->sym_module->fields.push_back(field);
+					}
+				}
 				parse_semis();
-				break;
 			}
-			default: {
-				m_log.err(ERR_EXPECTED_MODULE_STMT, m_current);
-				next_token(); // Consuming the unexpected token
-				break;
-			}
+			break;
+		}
+		case ';': {
+			parse_semis();
+			break;
+		}
+		default: {
+			m_log.err(ERR_EXPECTED_MODULE_STMT, m_current);
+			next_token(); // Consuming the unexpected token
+			break;
+		}
 		}
 	}
 	match('}');
@@ -392,22 +412,19 @@ u32 nyla::parser::parse_modifiers() {
 			next_token(); // Consuming protected
 			break;
 		}
-		case TK_PUBLIC: {
-			if (mods & nyla::ACCESS_MODS) {
-				m_log.err(ERR_CAN_ONLY_HAVE_ONE_ACCESS_MOD, m_current);
-			}
-			mods |= nyla::modifier::MOD_PUBLIC;
-			next_token(); // Consuming public
-			break;
-		}
 		case TK_EXTERNAL: {
 			mods |= nyla::modifier::MOD_EXTERNAL;
-			next_token(); // Consuming public
+			next_token(); // Consuming external
 			break;
 		}
 		case TK_CONST: {
 			mods |= nyla::modifier::MOD_CONST;
-			next_token(); // Consuming public
+			next_token(); // Consuming const
+			break;
+		}
+		case TK_COMPTIME: {
+			mods |= nyla::modifier::MOD_COMPTIME;
+			next_token(); // Consuming comptime
 			break;
 		}
 		default:
@@ -501,6 +518,10 @@ nyla::type_info nyla::parser::parse_type() {
 		}
 	}
 
+	// TODO: when parsing array types if a
+	// dimension size is encountered then all
+	// subsequent [] subscripts need to also
+	// have dimensional size info
 	if (m_current.tag == '[') {
 		std::vector<nyla::aexpr*> dim_sizes;
 		while (m_current.tag == '[') {
@@ -534,11 +555,20 @@ nyla::type_info nyla::parser::parse_type() {
 	return info;
 }
 
-nyla::afunction* nyla::parser::parse_function(u32 mods, const nyla::type_info& return_type) {
+nyla::afunction* nyla::parser::parse_function(bool is_constructor, nyla::aannotation* annotation, u32 mods, const nyla::type_info& return_type) {
 	nyla::afunction* function = make<nyla::afunction>(AST_FUNCTION, m_current);
 	m_function = function;
 
-	function->return_type = return_type.type;
+	// TODO: need to verify that the modifiers actually make sense
+
+
+	// TODO: prevent the return type from having dimensional info in it's
+	// array types
+	if (is_constructor) {
+		function->return_type = nyla::types::type_void;
+	} else {
+		function->return_type = return_type.type;
+	}
 	function->name_key    = parse_identifier();
 	bool is_external      = mods & MOD_EXTERNAL;
 
@@ -569,19 +599,51 @@ nyla::afunction* nyla::parser::parse_function(u32 mods, const nyla::type_info& r
 		param_types.push_back(param->type);
 	}
 
-	s32 decl_line_num = m_sym_table->has_function_been_declared(m_module->sym_module, function->name_key, param_types);
-	if (decl_line_num != -1) {
-		m_log.err(ERR_FUNCTION_REDECLARATION,
-			error_payload::func_decl({function->name_key, (u32)decl_line_num }), function);
+	if (is_constructor) {
+		s32 decl_line_num = m_sym_table->has_constructor_been_declared(m_module->sym_module, function->name_key, param_types);
+		if (decl_line_num != -1) {
+			m_log.err(ERR_CONSTRUCTOR_REDECLARATION,
+				error_payload::func_decl({ function->name_key, (u32)decl_line_num }), function);
+		}
+	} else {
+		s32 decl_line_num = m_sym_table->has_function_been_declared(m_module->sym_module, function->name_key, param_types);
+		if (decl_line_num != -1) {
+			m_log.err(ERR_FUNCTION_REDECLARATION,
+				error_payload::func_decl({ function->name_key, (u32)decl_line_num }), function);
+		}
 	}
 
-	function->sym_function = m_sym_table->enter_function(m_module->sym_module, function->name_key);
+	if (is_constructor) {
+		function->sym_function = m_sym_table->enter_constructor(m_module->sym_module, function->name_key);
+	} else {
+		function->sym_function = m_sym_table->enter_function(m_module->sym_module, function->name_key);
+	}
+
 	function->sym_function->line_num    = function->line_num;
+	function->sym_function->annotation  = annotation;
 	function->sym_function->mods        = mods;
 	function->sym_function->sym_module  = m_module->sym_module;
 	function->sym_function->name_key    = function->name_key;
 	function->sym_function->return_type = function->return_type;
 	function->sym_function->param_types = param_types;
+
+	if (annotation) {
+		if (annotation->ident_key == nyla::startup_ident) {
+			if (is_constructor) {
+				m_log.err(ERR_CONSTRUCTOR_MARKED_STARTUP, function);
+			} else {
+				// Functions with the @StartUp annotation must have
+				// no parameters and must return void
+				if (function->return_type != nyla::types::type_void) {
+					m_log.err(ERR_FUNCTION_MARKED_STARTUP_NOT_VOID_RETURN, function);
+				}
+				if (!function->parameters.empty()) {
+					m_log.err(ERR_FUNCTION_MARKED_STARTUP_HAS_PARAMS, function);
+				}
+			}
+			function->sym_function->call_at_startup = true;
+		}
+	}
 
 	if (!is_external) {
 		match('{');
@@ -594,7 +656,7 @@ nyla::afunction* nyla::parser::parse_function(u32 mods, const nyla::type_info& r
 
 	if (m_sym_table->m_search_for_main_function) {
 		if (!function->sym_function->is_member_function()) {
-			if (!function->is_external() && (function->sym_function->mods & MOD_PUBLIC)) {
+			if (!function->is_external() && !(function->sym_function->mods & nyla::ACCESS_MODS)) {
 				if (function->name_key == nyla::main_ident) {
 					// Canidate function for "main"
 					// TODO: need to also check for program arguments
@@ -656,6 +718,7 @@ nyla::avariable_decl* nyla::parser::parse_variable_decl(u32 mods,
 	variable_decl->sym_variable = sym_variable;
 	variable_decl->sym_variable->position_declared_at = ident->spos;
 	variable_decl->sym_variable->is_global = mods & MOD_STATIC;
+	variable_decl->sym_variable->sym_module = m_module->sym_module;
 
 	sym_variable->arr_dim_sizes = dim_sizes;
 	
@@ -800,6 +863,13 @@ void nyla::parser::parse_stmt(std::vector<nyla::aexpr*>& stmts) {
 		}
 		break;
 	}
+	case TK_THIS:
+	case TK_PLUS_PLUS: case TK_MINUS_MINUS: {
+		nyla::aexpr* expr = parse_expression();
+		parse_semis();
+		stmts.push_back(expr);
+		break;
+	}
 	case ';': {
 		parse_semis();
 		break;
@@ -811,6 +881,23 @@ void nyla::parser::parse_stmt(std::vector<nyla::aexpr*>& stmts) {
 		break;
 	}
 	}
+}
+
+nyla::aannotation* nyla::parser::parse_annotation() {
+	if (m_current.tag != '@') return nullptr; // Annotations are optional
+	nyla::aannotation* annotation = make<nyla::aannotation>(AST_ANNOTATION, m_current);
+	next_token(); // Consuming '@'
+	
+	u32 ident_key = parse_identifier();
+	if (ident_key == nyla::unidentified_ident) {
+		// Returning since annotations expect an identifier
+		return annotation;
+	}
+
+	annotation->ident_key = ident_key;
+
+	annotation->epos = m_prev_token.epos;
+	return annotation;
 }
 
 nyla::aexpr* nyla::parser::parse_return() {
@@ -1142,6 +1229,11 @@ nyla::aexpr* nyla::parser::parse_factor() {
 		nyla::anumber* null_number = make<nyla::anumber>(AST_VALUE_NULL, m_current);
 		next_token(); // Consuming null
 		return null_number;
+	}
+	case TK_THIS: {
+		nyla::acontrol* this_control = make<nyla::acontrol>(AST_THIS, m_current);
+		next_token(); // Consuming this;
+		return this_control;
 	}
 	case TK_CAST: {
 		next_token(); // consuming 'cast' keyword

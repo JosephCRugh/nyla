@@ -1,0 +1,14 @@
+
+module StartupAnnotation {
+	
+	static int assignMe;
+
+	@StartUp
+	static void thisFunctionIsRanAtStartup() {
+		assignMe = 55;
+	}
+
+	static int main() {
+		return assignMe;
+	}
+}

@@ -41,7 +41,7 @@ namespace nyla {
 
 		void check_unary_op(nyla::aunary_op* unary_op);
 
-		void check_ident(sym_scope* lookup_scope, nyla::aident* ident);
+		void check_ident(bool static_context, sym_scope* lookup_scope, nyla::aident* ident);
 
 		void check_for_loop(nyla::afor_loop* for_loop);
 		void check_while_loop(nyla::awhile_loop* while_loop);
@@ -59,7 +59,7 @@ namespace nyla {
 		void check_function_call(sym_function* called_function,
 			                     nyla::afunction_call* function_call);
 
-		void check_array_access(sym_scope* lookup_scope, nyla::aarray_access* array_access);
+		void check_array_access(bool static_context, sym_scope* lookup_scope, nyla::aarray_access* array_access);
 
 		void check_array(nyla::aarray* arr, u32 depth = 0);
 
@@ -79,13 +79,14 @@ namespace nyla {
 		nyla::aexpr* make_cast(nyla::aexpr* value, nyla::type* to_type);
 
 		void attempt_assignment(nyla::type* to_type, nyla::aexpr*& value);
+		bool attempt_array_assignment(nyla::type* to_element_type, nyla::aarray* arr);
 
 		bool is_lvalue(nyla::aexpr* expr);
 
-		void compare_arr_size(nyla::aarray* arr,
+		bool compare_arr_size(nyla::aarray* arr,
 			                  const std::vector<u32>& computed_arr_dim_sizes,
 			                  u32 depth = 0);
-		void compare_arr_size(nyla::astring* str,
+		bool compare_arr_size(nyla::astring* str,
 			                  const std::vector<u32>& computed_arr_dim_sizes,
 			                  u32 depth = 0);
 
@@ -112,6 +113,10 @@ namespace nyla {
 		nyla::afunction*  m_function   = nullptr;
 
 		llvm_generator m_llvm_generator;
+
+		bool m_checking_globals = false;
+		bool m_checking_fields  = false;
+
 	};
 }
 

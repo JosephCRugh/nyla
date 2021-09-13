@@ -1,7 +1,7 @@
 import Called;
 
 module Caller {
-	public static int main() {
+	static int main() {
 		return Called.CallMe(8);
 	}
 }

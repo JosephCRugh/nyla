@@ -20,6 +20,7 @@ namespace nyla {
 	struct analysis;
 	struct llvm_generator;
 	struct avariable_decl;
+	struct aannotation;
 
 	struct sym_module {
 		u32         name_key;
@@ -55,6 +56,8 @@ namespace nyla {
 		llvm::Function*          ll_function = nullptr;
 		sym_module*              sym_module  = nullptr;
 		u32                      line_num; // Line number in source code where it was declared
+		aannotation*             annotation = nullptr;
+		bool                     call_at_startup = false; // True if the function has @StartUp annotation
 
 		bool is_member_function() {
 			return !(mods & MOD_STATIC) &&
@@ -73,6 +76,8 @@ namespace nyla {
 		                          // was declared at. Used to make sure assignments occure
 		                          // after declaration and not before.
 		
+		sym_module* sym_module = nullptr;
+
 		nyla::type* type;
 		
 		std::vector<nyla::aexpr*> arr_dim_sizes;
@@ -111,9 +116,17 @@ namespace nyla {
 		s32 has_function_been_declared(sym_module* sym_module, u32 name_key,
 			                            std::vector<nyla::type*> param_types);
 
+		// Same logic as has_function_been_declared except for constructors
+		s32 has_constructor_been_declared(sym_module* sym_module, u32 name_key,
+			                              std::vector<nyla::type*> param_types);
+
 		// Creates a new function entry in the symbol table based on the
 		// function name.
 		sym_function* enter_function(sym_module* sym_module, u32 name_key);
+
+		// Creates a new constructor entry in the symbol table based on the
+		// constructor name.
+		sym_function* enter_constructor(sym_module* sym_module, u32 name_key);
 
 		// Has a variable been declared already within the current
 		// scope.
@@ -153,6 +166,9 @@ namespace nyla {
 		// Maps between a module's name_key and the symbol
 		// for the module
 		std::unordered_map<u32, sym_module*> m_modules;
+
+		s32 function_search(const std::vector<sym_function*>& functions, u32 name_key,
+			                std::vector<nyla::type*> param_types);
 
 		   // Current scope
 		sym_scope* m_scope = nullptr;

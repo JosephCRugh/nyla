@@ -56,9 +56,11 @@ namespace nyla {
 	class compiler {
 	public:
 
-		compiler(u32 flags);
+		compiler();
 		
-		void compile(const std::vector<std::string>& src_directories);
+		void set_flags(u32 flags);
+
+		void compile(const std::vector<std::string>& src_directories, const std::string& main_function_path);
 
 		// Finds a sym_table if it exist based on the internal path
 		sym_table* find_sym_table(const std::string& path);
@@ -75,8 +77,8 @@ namespace nyla {
 		u32 get_num_functions_count();
 
 		void add_global_initialize_expr(nyla::avariable_decl* expr);
+		void add_startup_function(llvm::Function* ll_startup_function);
 
-		void set_main_function_file(const std::string& main_function_path);
 		void set_executable_name(const std::string& executable_name);
 
 		// Cleanup anything allocated
@@ -93,6 +95,9 @@ namespace nyla {
 		void process_file(const file_location& source_file, sym_table* our_sym_table);
 
 		void analyze_file(sym_table* sym_table);
+
+		bool should_analyze() { return (m_flags & COMPFLAGS_FULL_COMPILATION) >= COMPFLAG_ONLY_PARSE_AND_ANALYZE; }
+		bool should_gen_obj_code() { return (m_flags & COMPFLAGS_FULL_COMPILATION) >= COMPFLAG_ONLY_GEN_OBJECT; }
 
 		// Primary module all the IR is dumped into
 		llvm::Module* m_llvm_module;
@@ -143,10 +148,14 @@ namespace nyla {
 		// time.
 		std::vector<nyla::avariable_decl*> m_global_initializer_exprs;
 
-		// If set then it is expected that the main
-		// function will be found in the file
+		// Functions that need to be called at startup
+		std::vector<llvm::Function*> m_startup_functions;
+
+		// The file where the main function (entry point) of
+		// the program is found. If multiple main functions are found
+		// during execution then all but the one found in this
+		// file is ignored
 		std::string m_main_function_file;
-		bool        m_main_function_file_set = false;
 
 		std::string m_executable_name = "program.exe";
 
