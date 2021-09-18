@@ -1,0 +1,21 @@
+import std.Std;
+
+module String {
+	
+	// How long the string is
+	uint length;
+	char* buffer;
+
+	String() {
+	}
+
+	String(char* buffer, uint length) {
+		this.buffer = new char[length];
+		this.length = length;
+		Std.memcpy(cast(byte*) this.buffer, cast(byte*) buffer, length);
+	}
+
+	bool isEmpty() {
+		return length == 0;
+	}
+}

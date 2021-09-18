@@ -13,7 +13,6 @@ nyla::analysis::analysis(nyla::compiler& compiler, nyla::log& log,
 }
 
 void nyla::analysis::check_file_unit() {
-	m_sym_table->m_started_analysis = true;
 	m_file_unit->literal_constant = false;
 	for (nyla::amodule* nmodule : m_file_unit->modules) {
 		check_module(nmodule);
@@ -141,7 +140,11 @@ void nyla::analysis::check_expression(nyla::aexpr* expr) {
 		check_array(dynamic_cast<nyla::aarray*>(expr));
 		break;
 	case AST_VAR_OBJECT:
-		check_var_object(dynamic_cast<nyla::avar_object*>(expr));
+	case AST_NEW_OBJECT:
+		check_object(dynamic_cast<nyla::aobject*>(expr));
+		break;
+	case AST_NEW_TYPE:
+		check_new_type(dynamic_cast<nyla::anew_type*>(expr));
 		break;
 	case AST_DOT_OP:
 		check_dot_op(dynamic_cast<nyla::adot_op*>(expr));
@@ -161,6 +164,10 @@ void nyla::analysis::check_expression(nyla::aexpr* expr) {
 
 void nyla::analysis::check_function(nyla::afunction* function) {
 	function->literal_constant = function->sym_function->mods & MOD_COMPTIME;
+
+	if (function->is_external() && function->name_key == nyla::memcpy_ident) {
+		function->sym_function->is_memcpy = true;
+	}
 
 	if (function->is_external()) return;
 	m_function = function;
@@ -528,6 +535,16 @@ void nyla::analysis::check_unary_op(nyla::aunary_op* unary_op) {
 		unary_op->type = nyla::types::type_bool;
 		break;
 	}
+	case '*': {
+		if (!unary_op->factor->type->is_ptr()) {
+			m_log.err(ERR_ATTEMPT_TO_DEREFERENCE_NON_POINTER, unary_op);
+			unary_op->type = nyla::types::type_error;
+			return;
+		}
+
+		unary_op->type = unary_op->factor->type->element_type;
+		break;
+	}
 	default:
 		assert(!"Handled unary check!");
 		break;
@@ -817,34 +834,72 @@ void nyla::analysis::check_array(nyla::aarray* arr, u32 depth) {
 	}
 }
 
-void nyla::analysis::check_var_object(nyla::avar_object* var_object) {
-	var_object->literal_constant = false;
+void nyla::analysis::check_object(nyla::aobject* object) {
+	object->literal_constant = false;
 
-	nyla::afunction_call* constructor_call = var_object->constructor_call;
+	nyla::afunction_call* constructor_call = object->constructor_call;
 	
-	u32 module_name_key = var_object->constructor_call->name_key;
+	u32 module_name_key = object->constructor_call->name_key;
 	sym_module* sym_module = m_file_unit->find_module(module_name_key);
 
 	if (!sym_module) {
-		m_log.err(ERR_COULD_NOT_FIND_MODULE_TYPE, var_object->constructor_call);
-		var_object->type = nyla::types::type_error;
+		m_log.err(ERR_COULD_NOT_FIND_MODULE_TYPE, object->constructor_call);
+		object->type = nyla::types::type_error;
 		return;
 	}
 
-	var_object->sym_module = sym_module;
+	object->sym_module = sym_module;
 
 	if (sym_module->no_constructors_found && constructor_call->arguments.empty()) {
 		// Assumed there is a default constructor
-		var_object->assumed_default_constructor = true;
-		var_object->type = nyla::type::get_or_enter_module(sym_module);
+		object->assumed_default_constructor = true;
+		object->type = nyla::type::get_or_enter_module(sym_module);
 	} else {
 		check_function_call(false, sym_module, constructor_call, true);
 		if (constructor_call->type == nyla::types::type_error) {
-			var_object->type = nyla::types::type_error;
+			object->type = nyla::types::type_error;
 			return;
 		}
-		if (!constructor_call->comptime_compat) var_object->comptime_compat = false;
-		var_object->type = nyla::type::get_or_enter_module(sym_module);
+		if (!constructor_call->comptime_compat) object->comptime_compat = false;
+		object->type = nyla::type::get_or_enter_module(sym_module);
+	}
+	if (object->tag == AST_NEW_OBJECT) {
+		object->comptime_compat = false;
+		object->type = nyla::type::get_ptr(object->type);
+	}
+}
+
+void nyla::analysis::check_new_type(nyla::anew_type* new_type) {
+	new_type->literal_constant = false;
+	new_type->comptime_compat = false;
+
+	if (new_type->type_to_allocate.type->is_arr()) {
+		for (nyla::aexpr* dim_size : new_type->type_to_allocate.dim_sizes) {
+			check_expression(dim_size);
+			// TODO: perform checks
+		}
+
+		new_type->type = new_type->type_to_allocate.type;
+	} else {
+		if (!new_type->value) {
+			// TODO: produce error
+			new_type->type = nyla::types::type_error;
+			return;
+		}
+
+		check_expression(new_type->value);
+		if (new_type->value->type == nyla::types::type_error) {
+			new_type->type = nyla::types::type_error;
+			return;
+		}
+
+		if (is_assignable_to(new_type->type_to_allocate.type, new_type->value->type)) {
+			attempt_assignment(new_type->type_to_allocate.type, new_type->value);
+		} else {
+			// TODO: produce error
+		}
+
+		new_type->type = nyla::type::get_ptr(new_type->type_to_allocate.type);
 	}
 }
 
@@ -957,11 +1012,13 @@ void nyla::analysis::check_dot_op(nyla::adot_op* dot_op) {
 				}
 
 			} else if (factor->type->is_module()) {
-				// TODO: could also be a pointer to a module
-				// 
 				static_context = false;
 				ref_module = factor->type->sym_module;
 				ref_scope  = factor->type->sym_module->scope;
+			} else if (factor->type->is_ptr() && factor->type->element_type->is_module()) {
+				static_context = false;
+				ref_module = factor->type->element_type->sym_module;
+				ref_scope = factor->type->element_type->sym_module->scope;
 			} else {
 				m_log.err(ERR_TYPE_DOES_NOT_HAVE_FIELD,
 					      error_payload::word({ factor_name_key }),
@@ -1076,12 +1133,12 @@ bool nyla::analysis::is_assignable_to(nyla::type* to, nyla::type* from) {
 	case TYPE_PTR: {
 		if (from->is_ptr()) {  // ptr & ptr
 			return to->ptr_depth == from->ptr_depth &&
-				to->get_base_type() == from->get_base_type();
+				to->get_base_type()->equals(from->get_base_type());
 		} else if (from == nyla::types::type_null) { // ptr & null
 			return true; // Pointers are always assignable null
 		} else if (from->is_arr()) { // ptr & arr
 			return to->ptr_depth == from->arr_depth &&
-				to->get_base_type() == from->get_base_type();
+				to->get_base_type()->equals(from->get_base_type());
 		} else if (from == nyla::types::type_string) { // ptr & string
 			return to->ptr_depth == 1
 				&& to->get_base_type()->is_char();

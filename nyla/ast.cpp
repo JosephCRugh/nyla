@@ -371,9 +371,25 @@ nyla::aarray::~aarray() {
 	}
 }
 
-void nyla::avar_object::print(std::ostream& os, u32 depth) const {
-	os << expr_header(depth) << "var" << '\n';
+void nyla::aobject::print(std::ostream& os, u32 depth) const {
+	os << expr_header(depth);
+	if (AST_VAR_OBJECT) {
+		os << "var";
+	} else {
+		os << "new";
+	}
+	os << '\n';
 	constructor_call->print(os, depth + 1);
+}
+
+nyla::anew_type::~anew_type() {
+	if (value) {
+		delete value;
+	}
+}
+
+void nyla::anew_type::print(std::ostream& os, u32 depth) const {
+	os << expr_header(depth) << "new_type: TODO";
 }
 
 void nyla::aannotation::print(std::ostream& os, u32 depth) const {

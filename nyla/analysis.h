@@ -63,7 +63,8 @@ namespace nyla {
 
 		void check_array(nyla::aarray* arr, u32 depth = 0);
 
-		void check_var_object(nyla::avar_object* var_object);
+		void check_object(nyla::aobject* object);
+		void check_new_type(nyla::anew_type* new_type);
 
 		void check_dot_op(nyla::adot_op* dot_op);
 

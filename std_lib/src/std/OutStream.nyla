@@ -1,4 +1,6 @@
-module IOStream {
+import std.String;
+
+module OutStream {
 	
 	private static external bool WriteFile(int*  hFile,
 	                                       char* lpBuffer,
@@ -8,7 +10,7 @@ module IOStream {
 
 	private int* handle;
 
-	IOStream(int* handle) {
+	OutStream(int* handle) {
 		this.handle = handle;
 	}
 
@@ -43,6 +45,10 @@ module IOStream {
 		WriteFile(handle, msg, length, &numberOfBytesWritten, null);
 	}
 
+	void print(String* msg) {
+		print(msg.buffer, msg.length);
+	}
+
 	void println(char[] msg) {
 		print(msg);
 		print("\n");
@@ -50,6 +56,10 @@ module IOStream {
 
 	void println(int i) {
 		print(i);
+		print("\n");
+	}
+
+	void println() {
 		print("\n");
 	}
 }

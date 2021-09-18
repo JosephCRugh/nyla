@@ -47,14 +47,18 @@ void nyla::llvm_generator::gen_file_unit() {
 	}
 }
 
-void nyla::llvm_generator::gen_declarations() {
+void nyla::llvm_generator::gen_type_declarations() {
 	for (nyla::amodule* nmodule : m_file_unit->modules) {
-
 		// Creating the type of the struct for the module
-		std::vector<llvm::Type*> ll_struct_types;
 		llvm::StructType* ll_struct_type = llvm::StructType::create(*llvm_context);
 		nmodule->sym_module->ll_struct_type = ll_struct_type;
+	}
+}
 
+void nyla::llvm_generator::gen_body_declarations() {
+	for (nyla::amodule* nmodule : m_file_unit->modules) {
+
+		std::vector<llvm::Type*> ll_struct_types;
 		for (nyla::avariable_decl* field : nmodule->fields) {
 			ll_struct_types.push_back(gen_type(field->type));
 		}
@@ -62,15 +66,11 @@ void nyla::llvm_generator::gen_declarations() {
 		if (ll_struct_types.empty()) {
 			ll_struct_types.push_back(llvm::Type::getInt8Ty(*llvm_context));
 		}
-		ll_struct_type->setBody(ll_struct_types);
-
-		if (m_print) {
-			ll_struct_type->setName(get_word(nmodule->name_key).c_str());
-		}
+		nmodule->sym_module->ll_struct_type->setBody(ll_struct_types);
 		
-
 		if (m_print) {
-			ll_struct_type->print(llvm::outs());
+			nmodule->sym_module->ll_struct_type->setName(get_word(nmodule->name_key).c_str());
+			nmodule->sym_module->ll_struct_type->print(llvm::outs());
 			std::cout << "\n\n";
 		}
 
@@ -131,6 +131,11 @@ void nyla::llvm_generator::gen_module(nyla::amodule* nmodule) {
 }
 
 void nyla::llvm_generator::gen_function_declaration(nyla::afunction* function) {
+
+	if (function->sym_function->is_memcpy) {
+		// Memcpy is already an existing function by LLVM
+		return;
+	}
 
 	llvm::Type* ll_return_type = gen_type(function->return_type);
 	std::vector<llvm::Type*> ll_parameter_types;
@@ -420,6 +425,11 @@ llvm::Value* nyla::llvm_generator::gen_expression(nyla::aexpr* expr) {
 		return gen_dot_op(dynamic_cast<nyla::adot_op*>(expr));
 	case AST_IF:
 		return gen_if(dynamic_cast<nyla::aif*>(expr));
+	case AST_NEW_TYPE:
+		return gen_new_type(dynamic_cast<nyla::anew_type*>(expr));
+	case AST_VAR_OBJECT:
+	case AST_NEW_OBJECT:
+		return gen_object(nullptr, dynamic_cast<nyla::aobject*>(expr));
 	default:
 		assert(!"Unimplemented expression generator");
 		return nullptr;
@@ -430,9 +440,8 @@ llvm::Value* nyla::llvm_generator::gen_expr_rvalue(nyla::aexpr* expr) {
 	llvm::Value* value = gen_expression(expr);
 	switch (expr->tag) {
 	case AST_IDENT:
-		// Assumed a variable
-		return m_llvm_builder->CreateLoad(value);
 	case AST_ARRAY_ACCESS:
+	case AST_VAR_OBJECT:
 		return m_llvm_builder->CreateLoad(value);
 	case AST_DOT_OP: {
 		// TODO: fix for array accesses (should be reflected similar to above)
@@ -524,7 +533,8 @@ llvm::Value* nyla::llvm_generator::gen_binary_op(nyla::abinary_op* binary_op) {
 
 		switch (binary_op->rhs->tag) {
 		case AST_VAR_OBJECT:
-			return gen_var_object(ll_alloca, dynamic_cast<nyla::avar_object*>(binary_op->rhs));
+		case AST_NEW_OBJECT:
+			return gen_object(ll_alloca, dynamic_cast<nyla::aobject*>(binary_op->rhs));
 		default: {
 			llvm::Value* ll_rvalue = gen_expr_rvalue(binary_op->rhs);
 			
@@ -725,6 +735,9 @@ llvm::Value* nyla::llvm_generator::gen_unary_op(nyla::aunary_op* unary_op) {
 	case '!': {
 		return m_llvm_builder->CreateNot(gen_expr_rvalue(unary_op->factor));
 	}
+	case '*': {
+		return m_llvm_builder->CreateLoad(gen_expr_rvalue(unary_op->factor));
+	}
 	default:
 		assert(!"Unimplemented unary case");
 		return nullptr;
@@ -739,7 +752,7 @@ llvm::Value* nyla::llvm_generator::gen_ident(nyla::aident* ident) {
 	if (sym_variable->is_field && !(sym_variable->mods & MOD_STATIC)
 		&& !m_initializing_module // Already GEP'd into the struct and placed the result in ll_alloc
 		) {
-		// Must be a member function. Eq. to this->var
+		// Must be a member function. Eq. to this.var
 		llvm::Value* ll_this = m_ll_function->getArg(0); // First argument is "this"
 		return m_llvm_builder->CreateStructGEP(ll_this, sym_variable->field_index);
 	} else {
@@ -748,6 +761,16 @@ llvm::Value* nyla::llvm_generator::gen_ident(nyla::aident* ident) {
 }
 
 llvm::Value* nyla::llvm_generator::gen_function_call(llvm::Value* ptr_to_struct, nyla::afunction_call* function_call) {
+	if (function_call->called_function->is_memcpy) {
+
+		return m_llvm_builder->CreateMemCpy(
+			gen_expression(function_call->arguments[0]), llvm::Align::None(),
+			gen_expression(function_call->arguments[1]), llvm::Align::None(),
+			gen_expr_rvalue(function_call->arguments[2])
+		);
+	}
+	
+	
 	llvm::Function* ll_called_function = function_call->called_function->ll_function;
 	std::vector<llvm::Value*> ll_parameter_values;
 	if (function_call->called_function->is_member_function()) {
@@ -916,6 +939,13 @@ void nyla::llvm_generator::gen_global_const_array(nyla::type* element_type,
 llvm::Value* nyla::llvm_generator::gen_array_access(llvm::Value* ll_location, nyla::aarray_access* array_access) {
 	
 	sym_variable* sym_variable = array_access->ident->sym_variable;
+	if (sym_variable->is_field && !(sym_variable->mods & MOD_STATIC)
+		&& !m_initializing_module && !ll_location) {
+		// Eq. to this.arr[n]
+		llvm::Value* ll_this = m_ll_function->getArg(0); // First argument is "this"
+		ll_location = m_llvm_builder->CreateStructGEP(ll_this, sym_variable->field_index);
+	}
+
 	nyla::type* arr_type = sym_variable->type;
 	
 	llvm::Value* ll_arr_alloca = m_llvm_builder->CreateLoad(ll_location);
@@ -999,16 +1029,45 @@ llvm::Value* nyla::llvm_generator::gen_type_cast(nyla::atype_cast* type_cast) {
 		// get the pointer after the size
 
 		return get_arr_ptr(val_type->element_type, ll_val);
+	} else if (cast_to_type->is_ptr() && val_type->is_ptr()) {
+		return m_llvm_builder->CreateBitCast(ll_val, ll_cast_type);
 	}
 	assert(!"Unhandled cast case");
 	return nullptr;
 }
 
-llvm::Value* nyla::llvm_generator::gen_var_object(llvm::Value* ptr_to_struct, nyla::avar_object* var_object) {
+llvm::Value* nyla::llvm_generator::gen_object(llvm::Value* ptr_to_struct, nyla::aobject* object) {
 	
+	if (object->tag == AST_VAR_OBJECT && !ptr_to_struct) {
+		ptr_to_struct = m_llvm_builder->CreateAlloca(
+			gen_type(object->type),
+			nullptr);
+	}
+
+	// Needs heap allocation
+	if (object->tag == AST_NEW_OBJECT) {
+		
+		u64 total_size = 0;
+		nyla::type* module_type = object->type->element_type;
+		for (nyla::avariable_decl* field : module_type->sym_module->fields) {
+			total_size += field->type->mem_size();
+		}
+
+		llvm::Value* ll_malloc = gen_malloc(gen_type(module_type), total_size);
+
+		if (ptr_to_struct) {
+			m_llvm_builder->CreateStore(
+				ll_malloc,
+				ptr_to_struct);
+		}
+		
+		ptr_to_struct = ll_malloc;
+
+	}
+
 	// Initializing the values in the data structure
 	m_initializing_module = true;
-	for (nyla::avariable_decl* field : var_object->sym_module->fields) {
+	for (nyla::avariable_decl* field : object->sym_module->fields) {
 		
 		// When initialzing globals not all the data has to be set.
 		// Only that data that was not able to be set by the global
@@ -1035,18 +1094,25 @@ llvm::Value* nyla::llvm_generator::gen_var_object(llvm::Value* ptr_to_struct, ny
 		if (initialize) {
 			u32 field_index = field->sym_variable->field_index;
 
-			field->sym_variable->ll_alloc = m_llvm_builder->CreateStructGEP(ptr_to_struct, field_index);
+			sym_variable* sym_variable = field->sym_variable;
+
+			sym_variable->ll_alloc = m_llvm_builder->CreateStructGEP(ptr_to_struct, field_index);
 			if (field->assignment) {
 				gen_expression(field->assignment);
 			} else {
+				if (!sym_variable->computed_arr_dim_sizes.empty()) {
+					// Allocating space for the array
+					llvm::Value* arr_alloca = gen_precomputed_array_alloca(sym_variable->type, sym_variable->computed_arr_dim_sizes);
+					m_llvm_builder->CreateStore(arr_alloca, sym_variable->ll_alloc);
+				}
 				gen_default_value(field->sym_variable, field->type, field->default_initialize);
 			}
 		}
 	}
 	m_initializing_module = false;
 
-	if (!var_object->assumed_default_constructor) {
-		gen_function_call(ptr_to_struct, var_object->constructor_call);
+	if (!object->assumed_default_constructor) {
+		gen_function_call(ptr_to_struct, object->constructor_call);
 	}
 	return ptr_to_struct;
 }
@@ -1126,6 +1192,7 @@ llvm::Value* nyla::llvm_generator::gen_loop(nyla::aloop_expr* loop_expr) {
 }
 
 llvm::Value* nyla::llvm_generator::gen_dot_op(nyla::adot_op* dot_op) {
+#define IS_LAST (idx+1 == dot_op->factor_list.size())
 	llvm::Value* ll_location = nullptr;
 	for (u32 idx = 0; idx < dot_op->factor_list.size(); idx++) {
 		nyla::aexpr* factor = dot_op->factor_list[idx];
@@ -1139,9 +1206,10 @@ llvm::Value* nyla::llvm_generator::gen_dot_op(nyla::adot_op* dot_op) {
 			nyla::aident* ident = dynamic_cast<nyla::aident*>(factor);
 			if (ident->is_array_length) {
 
+				// i32** -> i32*
 				llvm::Value* ll_arr_alloca = m_llvm_builder->CreateLoad(ll_location);
 				
-				// To i32* to store the length
+				// To i32* to obtain the length
 				llvm::Value* ll_as_i32_ptr =
 					m_llvm_builder->CreateBitCast(ll_arr_alloca, llvm::Type::getInt32PtrTy(*nyla::llvm_context));
 				
@@ -1156,13 +1224,18 @@ llvm::Value* nyla::llvm_generator::gen_dot_op(nyla::adot_op* dot_op) {
 				//     ^- This
 				if (!ident->references_module) {
 					ll_location = gen_ident(ident);
+
+					if (ident->type->is_ptr() && !IS_LAST) {
+						// Need to load the pointer first
+						ll_location = m_llvm_builder->CreateLoad(ll_location);
+					}
 				}
 			} else {
+				
 				// Any variable in the form   a.b, a[n].b, a().b  expects
 				// b to be a field and a to have already set ll_location
-				ll_location = m_llvm_builder->CreateStructGEP(
-					                              ll_location,
-					                              ident->sym_variable->field_index);
+				ll_location =
+					gen_dot_op_on_field(ident->sym_variable, ll_location, IS_LAST);
 			}
 
 			break;
@@ -1174,13 +1247,18 @@ llvm::Value* nyla::llvm_generator::gen_dot_op(nyla::adot_op* dot_op) {
 			nyla::aarray_access* array_access = dynamic_cast<nyla::aarray_access*>(factor);
 
 			if (!ll_location) {
+				// TODO: fix sym_variable->ll_alloc does not exist when accessing
+				// from context this.
+
 				ll_location = gen_array_access(array_access->ident->sym_variable->ll_alloc, array_access);
+				if (array_access->ident->type->is_ptr() && !IS_LAST) {
+					ll_location = m_llvm_builder->CreateLoad(ll_location);
+				}
 			} else {
 				// Must be a member of a struct
-				ll_location = m_llvm_builder->CreateStructGEP(
-					ll_location,
-					array_access->ident->sym_variable->field_index
-				);
+				ll_location =
+					gen_dot_op_on_field(array_access->ident->sym_variable, ll_location, IS_LAST);
+
 				ll_location = gen_array_access(ll_location, array_access);
 			}
 
@@ -1195,6 +1273,22 @@ llvm::Value* nyla::llvm_generator::gen_dot_op(nyla::adot_op* dot_op) {
 			assert(!"Should be unreachable");
 			break;
 		}
+		}
+	}
+#undef IS_LAST
+	return ll_location;
+}
+
+llvm::Value* nyla::llvm_generator::gen_dot_op_on_field(sym_variable* sym_variable,
+	                                                   llvm::Value* ll_location,
+	                                                   bool is_last_index) {
+	ll_location = m_llvm_builder->CreateStructGEP(
+		ll_location,
+		sym_variable->field_index);
+	if (sym_variable->type->is_ptr()) {
+		if (!is_last_index) {
+			// Needed to dot operator on pointers
+			ll_location = m_llvm_builder->CreateLoad(ll_location);
 		}
 	}
 	return ll_location;
@@ -1277,6 +1371,28 @@ llvm::Value* nyla::llvm_generator::gen_if(nyla::aif* ifstmt) {
 	return nullptr;
 }
 
+llvm::Value* nyla::llvm_generator::gen_new_type(nyla::anew_type* new_type) {
+
+	nyla::type* allocation_type = new_type->type_to_allocate.type;
+	if (allocation_type->is_arr()) {
+
+		// TODO: need to handle for multi-dimensional arrays
+		llvm::Value* ll_malloc =
+			gen_malloc(gen_type(allocation_type->element_type),
+				       allocation_type->element_type->mem_size(),
+					   gen_expr_rvalue(new_type->type_to_allocate.dim_sizes[0])
+						
+				);
+		return ll_malloc;
+	} else {
+		llvm::Value* ll_malloc =
+			gen_malloc(gen_type(allocation_type), allocation_type->mem_size());
+		m_llvm_builder->CreateStore(gen_expr_rvalue(new_type->value), ll_malloc);
+
+		return ll_malloc;
+	}
+}
+
 llvm::Type* nyla::llvm_generator::gen_type(nyla::type* type) {
 	switch (type->tag) {
 	case TYPE_BYTE:
@@ -1348,9 +1464,10 @@ llvm::Value* nyla::llvm_generator::gen_allocation(sym_variable* sym_variable) {
 }
 
 llvm::Value* nyla::llvm_generator::gen_precomputed_array_alloca(nyla::type* type, const std::vector<u32>& dim_sizes, u32 depth) {
-	// TODO: Need to create storage for the u32 dimension size
 	
 	llvm::Value* ll_alloca = gen_array_alloca(type->element_type, dim_sizes[depth]);
+	llvm::Value* ll_arr_ptr = get_arr_ptr(type->element_type, ll_alloca);
+
 	// Need to allocate the space as well for the elements if
 	// the elements are also arrays
 	bool array_elements = dim_sizes.size() - 1 != depth;
@@ -1359,7 +1476,7 @@ llvm::Value* nyla::llvm_generator::gen_precomputed_array_alloca(nyla::type* type
 			llvm::Value* inner_array = gen_precomputed_array_alloca(type->element_type, dim_sizes, depth + 1);
 			m_llvm_builder->CreateStore(
 				inner_array,
-				m_llvm_builder->CreateGEP(ll_alloca, get_ll_int32(i))
+				m_llvm_builder->CreateGEP(ll_arr_ptr, get_ll_int32(i))
 			);
 		}
 	}
@@ -1470,6 +1587,27 @@ void nyla::llvm_generator::gen_default_array(sym_variable* sym_variable,
 			gen_default_array(sym_variable, type->element_type, ll_element, depth + 1);
 		}
 	}
+}
+
+llvm::Value* nyla::llvm_generator::gen_malloc(llvm::Type* ll_type_to_alloc, u64 total_mem_size) {
+	return gen_malloc(ll_type_to_alloc, total_mem_size, nullptr);
+}
+
+llvm::Value* nyla::llvm_generator::gen_malloc(llvm::Type* ll_type_to_alloc,
+	                                          u64 total_mem_size,
+	                                          llvm::Value* ll_array_size) {
+	
+	llvm::Value* ll_malloc = llvm::CallInst::CreateMalloc(
+		m_llvm_builder->GetInsertBlock(),      // BasicBlock *InsertAtEnd
+		llvm::Type::getInt64Ty(*llvm_context), // Type *IntPtrTy
+		ll_type_to_alloc,                      // Type *AllocTy
+		get_ll_int64(total_mem_size),          // Value *AllocSize
+		ll_array_size,
+		nullptr, ""
+	);
+	m_llvm_builder->Insert(ll_malloc);
+
+	return ll_malloc;
 }
 
 llvm::Constant* nyla::get_ll_int1(bool tof) {

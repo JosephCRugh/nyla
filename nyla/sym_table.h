@@ -21,6 +21,7 @@ namespace nyla {
 	struct llvm_generator;
 	struct avariable_decl;
 	struct aannotation;
+	struct aimport;
 
 	struct sym_module {
 		u32         name_key;
@@ -58,6 +59,7 @@ namespace nyla {
 		u32                      line_num; // Line number in source code where it was declared
 		aannotation*             annotation = nullptr;
 		bool                     call_at_startup = false; // True if the function has @StartUp annotation
+		bool                     is_memcpy = false;
 
 		bool is_member_function() {
 			return !(mods & MOD_STATIC) &&
@@ -86,16 +88,30 @@ namespace nyla {
 		llvm::Value* ll_alloc;
 	};
 
+	using import_iterator = std::unordered_map<std::string, aimport*>::iterator;
 	class sym_table {
 	public:
 
+		// Because the order in which dependency states are
+		// processed is very non-linear iterators are used to
+		// keep track how far into processing how many of
+		// the dependencies have been processed for a state
+		import_iterator m_parse_imports_iterator;
+		import_iterator m_resolve_imports_iterator;
+		import_iterator m_analyze_imports_iterator;
+		import_iterator m_gen_type_decl_iterator;
+		import_iterator m_gen_body_decl_iterator;
+		import_iterator m_imports_end;
+
 		// Flags indicating the state while processing
 		// a file
-		bool m_started_processing         = false;
-		bool m_started_import_resolution  = false;
-		bool m_started_analysis           = false;
-		bool m_started_ir_declaration_gen = false;
-
+		bool m_started_processing                = false;
+		bool m_started_parsing                   = false;
+		bool m_started_import_resolution         = false;
+		bool m_started_analysis                  = false;
+		bool m_started_ir_module_declaration_gen = false;
+		bool m_started_ir_func_declaration_gen   = false;
+		
 		bool m_found_compilation_errors  = false;
 
 		// If set to false the main function will be ignored
@@ -178,6 +194,7 @@ namespace nyla {
 		nyla::parser*         m_parser;
 		nyla::analysis*       m_analysis;
 		nyla::llvm_generator* m_llvm_generator;
+
 
 	};
 }

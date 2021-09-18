@@ -68,6 +68,7 @@ namespace nyla {
 		AST_VALUE_NULL,
 		AST_NEW_OBJECT,
 		AST_VAR_OBJECT,
+		AST_NEW_TYPE,
 
 		AST_ERROR
 	};
@@ -161,7 +162,6 @@ namespace nyla {
 		// The module symbol stored in the sym_table
 		nyla::sym_module* sym_module = nullptr;
 		nyla::sym_scope*  sym_scope  = nullptr;
-		bool found_constructor = false;
 
 		virtual void print(std::ostream& os, u32 depth = 0) const override;
 	};
@@ -232,13 +232,23 @@ namespace nyla {
 		virtual void print(std::ostream& os, u32 depth = 0) const override;
 	};
 
-	// Creates a new object on the stack
-	struct avar_object : public aexpr {
-		virtual ~avar_object() override {}
+	// Representation for either stack or heap objects
+	struct aobject : public aexpr {
+		virtual ~aobject() override {}
 
 		nyla::afunction_call* constructor_call;
 		nyla::sym_module*     sym_module;
 		bool assumed_default_constructor = false;
+		virtual void print(std::ostream& os, u32 depth) const override;
+	};
+
+	// Allocating space for a type onto the heap
+	struct anew_type : public aexpr {
+		virtual ~anew_type();
+
+		type_info    type_to_allocate;
+		nyla::aexpr* value = nullptr;
+
 		virtual void print(std::ostream& os, u32 depth) const override;
 	};
 

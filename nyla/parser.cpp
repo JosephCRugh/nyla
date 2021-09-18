@@ -160,8 +160,6 @@ bool nyla::parser::parse_import() {
 
 void nyla::parser::resolve_imports() {
 
-	m_sym_table->m_started_import_resolution = true;
-
 	// TODO: Should ensure that aliases are not created for modules
 	// that do not exist and should ensure that aliases are always
 	// needed
@@ -330,6 +328,7 @@ nyla::amodule* nyla::parser::parse_module() {
 				// variable declaration of the module
 				if (peek_token(1).tag == '(') {
 					// Assumed constructor declaration
+					nmodule->sym_module->no_constructors_found = false;
 					nmodule->constructors.push_back(parse_function(true, annotation, stmt_mods, {}));
 					break;
 				}
@@ -1265,9 +1264,39 @@ nyla::aexpr* nyla::parser::parse_factor() {
 		next_token(); // Consuming character
 		return char_number;
 	}
+	case TK_NEW: {
+		if (peek_token(1).tag == TK_IDENTIFIER) {
+			if (peek_token(2).tag == '(') {
+				// Assumed object creation
+				goto ast_objects;
+			}
+		}
+
+		nyla::anew_type* new_type = make<nyla::anew_type>(AST_NEW_TYPE, m_current);
+
+		next_token(); // Consuming 'new' token
+
+		// Not object allocation must be a built-in type allocation
+		
+		new_type->type_to_allocate = parse_type();
+		new_type->epos = m_prev_token.epos;
+
+		// Built-in type constructors such as new int(55)
+		if (m_current.tag == '(') {
+			next_token(); // Consuming '('
+			new_type->value = parse_factor();
+			match(')');
+		}
+
+		return new_type;
+	}
 	case TK_VAR: {
-		nyla::avar_object* var_object = make<nyla::avar_object>(AST_VAR_OBJECT, m_current, m_current);
-		next_token(); // Consuming var
+		ast_objects:
+
+		ast_tag atag = m_current.tag == TK_VAR ? AST_VAR_OBJECT : AST_NEW_OBJECT;
+
+		nyla::aobject* object = make<nyla::aobject>(atag, m_current);
+		next_token(); // Consuming 'var' or 'new' token
 		nyla::token identifier_token = m_current;
 		u32 ident_key = parse_identifier();
 		if (ident_key == nyla::unidentified_ident) {
@@ -1280,10 +1309,9 @@ nyla::aexpr* nyla::parser::parse_factor() {
 		}
 
 		nyla::afunction_call* function_call = parse_function_call(ident_key, identifier_token);
-		var_object->constructor_call = function_call;
-		return var_object;
+		object->constructor_call = function_call;
+		return object;
 	}
-
 	case '(': {
 		match('(');
 		nyla::aexpr* expr = parse_expression();
@@ -1466,7 +1494,7 @@ nyla::token nyla::parser::peek_token(u32 n) {
 	if (n == 0) {
 		assert(!"There is no reason to peek zero tokens");
 	}
-	for (u32 i = 0; i < n; i++) {
+	for (u32 i = m_saved_tokens.size(); i < n; i++) {
 		m_saved_tokens.push(m_lexer.next_token());
 	}
 	return m_saved_tokens.back();

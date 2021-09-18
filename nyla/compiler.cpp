@@ -13,6 +13,7 @@
 #include <iomanip>
 
 llvm::LLVMContext* nyla::llvm_context = nullptr;
+llvm::TargetMachine* nyla::g_llvm_target_machine = nullptr;
 
 nyla::compiler::compiler() {
 	nyla::llvm_context = new llvm::LLVMContext;
@@ -35,6 +36,7 @@ void nyla::compiler::compile(const std::vector<std::string>& src_directories, co
 	assert(!main_function_path.empty());
 	
 	if (main_function_path.empty()) {
+		m_found_compilation_errors = true;
 		m_log.global_error(ERR_FILE_WITH_MAIN_FUNCTION_EMPTY);
 		return;
 	}
@@ -42,6 +44,14 @@ void nyla::compiler::compile(const std::vector<std::string>& src_directories, co
 	m_main_function_file = main_function_path;
 
 	init_llvm_native_target();
+	if (!nyla::g_llvm_target_machine) {
+		nyla::g_llvm_target_machine = nyla::create_llvm_target_machine();
+	}
+
+	if (!nyla::g_llvm_target_machine) {
+		m_found_compilation_errors = true;
+		return;
+	}
 
 	std::vector<std::string> resolved_src_directories;
 	for (const std::string& src_directory : src_directories) {
@@ -99,7 +109,7 @@ void nyla::compiler::compile(const std::vector<std::string>& src_directories, co
 	std::string obj_name = m_executable_name + ".o";
 	
 	u64 compile_st = nyla::get_time_in_milliseconds();
-	m_llvm_target_machine = nyla::write_obj_file(obj_name.c_str(), m_llvm_module);
+	nyla::write_obj_file(obj_name.c_str(), m_llvm_module, nyla::g_llvm_target_machine);
 	u64 compile_time = nyla::get_time_in_milliseconds() - compile_st;
 
 	u64 link_st = nyla::get_time_in_milliseconds();
@@ -110,6 +120,8 @@ void nyla::compiler::compile(const std::vector<std::string>& src_directories, co
 	clang_command += options + " ";
 	clang_command += obj_name;
 	clang_command += " -o " + m_executable_name;
+
+	std::cout << "-- Linking: " << m_executable_name << '\n';
 
 	system(clang_command.c_str());
 	u64 link_time = nyla::get_time_in_milliseconds() - link_st;
@@ -228,6 +240,7 @@ void nyla::compiler::collect_source_files(const std::string& directory,
 }
 
 void nyla::compiler::process_files(std::vector<file_location>& source_files) {
+
 	auto it = m_sym_tables.find(m_main_function_file);
 	if (it == m_sym_tables.end()) {
 		m_log.global_error(ERR_FILE_WITH_MAIN_FUNCTION_DOES_NOT_EXIST,
@@ -269,31 +282,13 @@ our_sym_table->m_found_compilation_errors = true; \
 	return;                                       \
  }
 
+	if (our_sym_table->m_started_processing) return;
 	our_sym_table->m_started_processing = true;
 
 	std::cout << "-- Processing: " << source_file.system_path << '\n';
 
-	// Order in which files are processed
-	// 1. Parse file
-	// 2. Parse all dependency files
-	// 3. resolve our imports
-	// 4. ensure all the dependency files have resolved their imports
-	//   -- at this point the file and all its dependency files should share correct
-	//      information about types
-	// 5. Make sure no errors exist in the dependency files (checked during step 4)
-	// 6. perform analysis
-	// 7. make sure all imports have completed analysis
-	// 8. make sure there are no errors in any of the imported files
-	// 9. Gen LLVM IR declarations
-	// 10. gensure all dependency files have generated LLVM IR declarations
-	// 11. complete any work needed with comptime stuff (This has to be done so late because
-	//    comptime stuff could rely on comptime stuff in other files)
-	// 12. finally create the LLVM IR for the functions
-
-	// Stage 1
-	//////////////////////////////
-	// Parsing
-	//////////////////////////////
+	// 1. Setup everything needed to parse, analyze and
+	//    generate code
 	u64 parse_st = nyla::get_time_in_milliseconds();
 	c8* buffer;
 	ulen buffer_len;
@@ -323,130 +318,65 @@ our_sym_table->m_found_compilation_errors = true; \
 	our_sym_table->set_analysis(&analysis);
 	our_sym_table->set_llvm_generator(&llvm_generator);
 
-	parser.parse_imports();
-	parser.parse_file_unit();
-	m_total_parse_time_in_milliseconds += nyla::get_time_in_milliseconds() - parse_st;
+	// 2. Parsing our file
+	parse_file(our_sym_table);
+	if (log.has_errors()) ERROR_RETURN();
 
+	our_sym_table->m_parse_imports_iterator   = file_unit->imports.begin();
+	our_sym_table->m_resolve_imports_iterator = file_unit->imports.begin();
+	our_sym_table->m_analyze_imports_iterator = file_unit->imports.begin();
+	our_sym_table->m_gen_body_decl_iterator   = file_unit->imports.begin();
+	our_sym_table->m_gen_type_decl_iterator   = file_unit->imports.begin();
+	our_sym_table->m_imports_end              = file_unit->imports.end();
+
+	// 3. Parsing all the dependencies found in
+	//    the imports
+	parse_dependencies(our_sym_table);
+	if (log.has_errors()) ERROR_RETURN();
+
+	// 4. Import resolution
+	resolve_imports(our_sym_table);
 	if (log.has_errors()) ERROR_RETURN();
 	
-	if (m_flags & COMPFLAG_DISPLAY_AST) {
-		std::cout << "-- Abstract Syntax Tree: " << source_file.internal_path << '\n';
-		std::cout << *file_unit << '\n';
-	}
-	
-	// Stage 2
-	//////////////////////////////
-	// Parsing dependency files
-	//////////////////////////////
-	for (auto& pair : file_unit->imports) {
-		std::string internal_dep_path = pair.first;
-		sym_table* dep_sym_table = m_sym_tables[internal_dep_path];
-		if (!dep_sym_table->m_started_processing) {
-			nyla::file_location location = dep_sym_table->get_file_location();
-			process_file(location, dep_sym_table);
-		}
+	// 5. Import resolution for all dependencies
+	if (!resolve_dependency_imports(our_sym_table)) {
+		ERROR_RETURN();
 	}
 
-	// Stage 3
-	//////////////////////////////
-	// Resolving imports
-	//////////////////////////////
-
-	parse_st = nyla::get_time_in_milliseconds();
-	// It is possible the imports were already resolved
-	// by a file that depends on this file
-	if (!our_sym_table->m_started_import_resolution) {
-		parser.resolve_imports();
-	}
-	if (log.has_errors()) ERROR_RETURN();
-	
-	m_total_parse_time_in_milliseconds += nyla::get_time_in_milliseconds() - parse_st;
-
-	// Stage 4 and 5
-	//////////////////////////////
-	// Ensuring dependency imports
-	// are resolved
-	//////////////////////////////
-	for (auto& pair : file_unit->imports) {
-		std::string internal_dep_path = pair.first;
-		sym_table* dep_sym_table = m_sym_tables[internal_dep_path];
-		if (dep_sym_table->m_found_compilation_errors) ERROR_RETURN();
-		if (!dep_sym_table->m_started_import_resolution) {
-			dep_sym_table->get_parser()->resolve_imports();
-		}
-		if (dep_sym_table->m_found_compilation_errors) ERROR_RETURN();
-	}
-
-	// Stage 6
-	//////////////////////////////
-	// Analyzing
-	//////////////////////////////
-
+	// 6. Analyzing the file
 	if (!should_analyze()) return;
-
-	// It is possible the file was already
-	// analyzed by a dependency file
-	if (!our_sym_table->m_started_analysis) {
-		analyze_file(our_sym_table);
-	}
-
+	analyze_file(our_sym_table);
 	if (log.has_errors()) ERROR_RETURN();
 	
-
-	// Stage 7 and 8
-	//////////////////////////////
-	// Making sure all dependencies
-	// have been analyzed
-	//////////////////////////////
-	for (auto& pair : file_unit->imports) {
-		std::string internal_dep_path = pair.first;
-		sym_table* dep_sym_table = m_sym_tables[internal_dep_path];
-		if (dep_sym_table->m_found_compilation_errors) ERROR_RETURN();
-		if (!dep_sym_table->m_started_analysis) {
-			analyze_file(dep_sym_table);
-		}
-		if (dep_sym_table->m_found_compilation_errors) ERROR_RETURN();
+	// 7. Analyzing all the dependency files
+	if (!analyze_dependencies(our_sym_table)) {
+		ERROR_RETURN();
 	}
 
-	// Stage 9
-	//////////////////////////////
-	// Gen LLVM IR Declarations
-	//////////////////////////////
+	// Freeing the buffer since it was only
+	// need to stay around for errors
+	delete[] buffer;
 
+	// 8. Generating module declarations
 	if (!should_gen_obj_code()) return;
+	gen_type_declarations(our_sym_table);
 
-	if (!our_sym_table->m_started_ir_declaration_gen) {
-		our_sym_table->m_started_ir_declaration_gen = true;
-		llvm_generator.gen_declarations();
-	}
+	// 9. Generating the module declarations for
+	//    dependency files
+	gen_dependency_type_declarations(our_sym_table);
 
-	// Stage 10
-	//////////////////////////////
-	// Gen dependencies
-	// LLVM IR Declarations
-	//////////////////////////////
-	for (auto& pair : file_unit->imports) {
-		std::string internal_dep_path = pair.first;
-		sym_table* dep_sym_table = m_sym_tables[internal_dep_path];
-		if (!dep_sym_table->m_started_ir_declaration_gen) {
-			dep_sym_table->m_started_ir_declaration_gen = true;
-			dep_sym_table->get_llvm_generator()->gen_declarations();
-		}
-	}
+	// 10. Generating the function declarations
+	gen_body_declarations(our_sym_table);
 
-	// Stage 11
-	//////////////////////////////
-	// Comptime processing
-	// 
-	// TODO: not implemented yet
-	//////////////////////////////
+	// 11. Generating the function declarations for dependencies
+	gen_dependency_body_declarations(our_sym_table);
 
-	// Stage 12
-	//////////////////////////////
-	// Generating LLVM IR
-	//////////////////////////////
+	// 12.
+	// TODO: comptime function generation needs to happen here
 
-	if (m_flags & COMPFLAG_DISPLAY_LLVM_IR) {
+	// 13. Generating the llvm function code
+
+	if ((m_flags & COMPFLAG_DISPLAY_LLVM_IR) || (m_flags & COMPFLAG_DISPLAY_STAGES)) {
 		std::cout << "-- LLVM IR: " << source_file.system_path << '\n';
 	}
 	u64 it_gen_st = nyla::get_time_in_milliseconds();
@@ -461,15 +391,151 @@ our_sym_table->m_found_compilation_errors = true; \
 #undef ERROR_RETURN
 }
 
-void nyla::compiler::analyze_file(sym_table* sym_table) {
+void nyla::compiler::parse_file(sym_table* our_sym_table) {
+	if (our_sym_table->m_started_parsing) return;
+	u64 parse_st = nyla::get_time_in_milliseconds();
+	our_sym_table->m_started_parsing = true;
+	nyla::parser* parser = our_sym_table->get_parser();
+	parser->parse_imports();
+	parser->parse_file_unit();
+	m_total_parse_time_in_milliseconds += nyla::get_time_in_milliseconds() - parse_st;
+}
+
+void nyla::compiler::parse_dependencies(sym_table* our_sym_table) {
+	import_iterator& it = our_sym_table->m_parse_imports_iterator;
+	while (it != our_sym_table->m_imports_end) {
+		std::string internal_dep_path = it->first;
+		sym_table* dep_sym_table = m_sym_tables[internal_dep_path];
+		if (!dep_sym_table->m_started_processing) {
+			nyla::file_location location = dep_sym_table->get_file_location();
+			process_file(location, dep_sym_table);
+		}
+		if (it != our_sym_table->m_imports_end) {
+			++it;
+		}
+	}
+}
+
+void nyla::compiler::resolve_imports(sym_table* our_sym_table) {
+	if (our_sym_table->m_started_import_resolution) return;
+	our_sym_table->m_started_import_resolution = true;
+
 	if (m_flags & COMPFLAG_DISPLAY_STAGES) {
-		std::cout << "-- Analyzing: " << sym_table->get_file_location().system_path << '\n';
+		std::cout << "-- Resolving imports: " << our_sym_table->get_file_location().system_path << '\n';
+	}
+
+	u64 parse_st = nyla::get_time_in_milliseconds();
+	nyla::parser* parser = our_sym_table->get_parser();
+	parser->resolve_imports();
+	m_total_parse_time_in_milliseconds += nyla::get_time_in_milliseconds() - parse_st;
+}
+
+bool nyla::compiler::resolve_dependency_imports(sym_table* our_sym_table) {
+	import_iterator& it = our_sym_table->m_resolve_imports_iterator;
+	while (it != our_sym_table->m_imports_end) {
+		std::string internal_dep_path = it->first;
+		sym_table* dep_sym_table = m_sym_tables[internal_dep_path];
+		ensure_state(dep_sym_table, FS_PARSED);
+		if (dep_sym_table->m_found_compilation_errors) return false;
+		resolve_imports(dep_sym_table);
+		if (dep_sym_table->m_found_compilation_errors) return false;
+		if (it != our_sym_table->m_imports_end) {
+			++it;
+		}
+	}
+	return true;
+}
+
+void nyla::compiler::analyze_file(sym_table* our_sym_table) {
+	if (our_sym_table->m_started_analysis) return;
+	our_sym_table->m_started_analysis = true;
+
+	if (m_flags & COMPFLAG_DISPLAY_STAGES) {
+		std::cout << "-- Analyzing: " << our_sym_table->get_file_location().system_path << '\n';
 	}
 	
 	u64 parse_st = nyla::get_time_in_milliseconds();
-	sym_table->get_analysis()->check_file_unit();
+	our_sym_table->get_analysis()->check_file_unit();
 	m_total_parse_time_in_milliseconds += nyla::get_time_in_milliseconds() - parse_st;
 	
+}
+
+bool nyla::compiler::analyze_dependencies(sym_table* our_sym_table) {
+	import_iterator& it = our_sym_table->m_analyze_imports_iterator;
+	while (it != our_sym_table->m_imports_end) {
+		std::string internal_dep_path = it->first;
+		sym_table* dep_sym_table = m_sym_tables[internal_dep_path];
+		if (dep_sym_table->m_found_compilation_errors) return false;
+		ensure_state(dep_sym_table, FS_IMPORT_RESOLVED);
+		analyze_file(dep_sym_table);
+		if (dep_sym_table->m_found_compilation_errors) return false;
+		if (it != our_sym_table->m_imports_end) {
+			++it;
+		}
+	}
+	return true;
+}
+
+void nyla::compiler::gen_type_declarations(sym_table* our_sym_table) {
+	if (our_sym_table->m_started_ir_module_declaration_gen) return;
+	our_sym_table->m_started_ir_module_declaration_gen = true;
+
+	if (m_flags & COMPFLAG_DISPLAY_STAGES) {
+		std::cout << "-- Gen module decls: " << our_sym_table->get_file_location().system_path << '\n';
+	}
+
+	llvm_generator* llvm_generator = our_sym_table->get_llvm_generator();
+	llvm_generator->gen_type_declarations();
+}
+
+void nyla::compiler::gen_dependency_type_declarations(sym_table* our_sym_table) {
+	import_iterator& it = our_sym_table->m_gen_type_decl_iterator;
+	while (it != our_sym_table->m_imports_end) {
+		std::string internal_dep_path = it->first;
+		sym_table* dep_sym_table = m_sym_tables[internal_dep_path];
+		ensure_state(dep_sym_table, FS_ANALYZED);
+		gen_type_declarations(dep_sym_table);
+		if (it != our_sym_table->m_imports_end) {
+			++it;
+		}
+	}
+}
+
+void nyla::compiler::gen_body_declarations(sym_table* our_sym_table) {
+	if (our_sym_table->m_started_ir_func_declaration_gen) return;
+	our_sym_table->m_started_ir_func_declaration_gen = true;
+
+	if (m_flags & COMPFLAG_DISPLAY_STAGES) {
+		std::cout << "-- Gen function decls: " << our_sym_table->get_file_location().system_path << '\n';
+	}
+
+	llvm_generator* llvm_generator = our_sym_table->get_llvm_generator();
+	llvm_generator->gen_body_declarations();
+}
+
+void nyla::compiler::gen_dependency_body_declarations(sym_table* our_sym_table) {
+	import_iterator& it = our_sym_table->m_gen_body_decl_iterator;
+	while (it != our_sym_table->m_imports_end) {
+		std::string internal_dep_path = it->first;
+		sym_table* dep_sym_table = m_sym_tables[internal_dep_path];
+		ensure_state(dep_sym_table, FS_TYPE_DECL_GEN);
+		gen_body_declarations(dep_sym_table);
+		if (it != our_sym_table->m_imports_end) {
+			++it;
+		}
+	}
+}
+
+void nyla::compiler::ensure_state(sym_table* dep_sym_table, file_state state) {
+	parse_dependencies(dep_sym_table);
+	if (state < FS_IMPORT_RESOLVED) return;
+	resolve_dependency_imports(dep_sym_table);
+	if (state < FS_ANALYZED) return;
+	analyze_dependencies(dep_sym_table);
+	if (state < FS_TYPE_DECL_GEN) return;
+	gen_dependency_type_declarations(dep_sym_table);
+	if (state < FS_BODY_DECL_GEN) return;
+	gen_dependency_body_declarations(dep_sym_table);
 }
 
 void nyla::compiler::completely_cleanup() {
@@ -477,8 +543,4 @@ void nyla::compiler::completely_cleanup() {
 	nyla::g_word_table->clear_table();
 	delete m_llvm_module;
 	delete nyla::llvm_context;
-	// TargetMachine gets up a lot of memory
-	if (m_llvm_target_machine) {
-		delete m_llvm_target_machine;
-	}
 }

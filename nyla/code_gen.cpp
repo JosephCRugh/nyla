@@ -17,10 +17,9 @@ void nyla::init_llvm_native_target() {
 	llvm::InitializeNativeTargetAsmPrinter();
 }
 
-llvm::TargetMachine* nyla::write_obj_file(c_string fname, llvm::Module* llvm_module) {
+llvm::TargetMachine* nyla::create_llvm_target_machine() {
 
 	auto target_triple = llvm::sys::getDefaultTargetTriple();
-	llvm_module->setTargetTriple(target_triple);
 
 	std::string target_error;
 	auto target = llvm::TargetRegistry::lookupTarget(target_triple, target_error);
@@ -38,6 +37,14 @@ llvm::TargetMachine* nyla::write_obj_file(c_string fname, llvm::Module* llvm_mod
 	llvm::TargetMachine* target_machine =
 		target->createTargetMachine(target_triple, CPU, features, opt, RM);
 
+	return target_machine;
+}
+
+bool nyla::write_obj_file(c_string fname, llvm::Module* llvm_module, llvm::TargetMachine* target_machine) {
+
+	auto target_triple = llvm::sys::getDefaultTargetTriple();
+	llvm_module->setTargetTriple(target_triple);
+
 	llvm_module->setDataLayout(target_machine->createDataLayout());
 
 	std::error_code err;
@@ -45,17 +52,17 @@ llvm::TargetMachine* nyla::write_obj_file(c_string fname, llvm::Module* llvm_mod
 
 	if (err) {
 		llvm::errs() << "Could not open file: " << err.message();
-		return nullptr;
+		return false;
 	}
 
 	llvm::legacy::PassManager pass;
 	if (target_machine->addPassesToEmitFile(pass, dest, nullptr, llvm::CGFT_ObjectFile)) {
 		llvm::errs() << "TheTargetMachine can't emit a file of this type";
-		return nullptr;
+		return false;
 	}
 
 	pass.run(*llvm_module);
 	dest.flush();
 
-	return target_machine;
+	return true;
 }

@@ -1,0 +1,20 @@
+module B {
+	int c = 61;
+}
+
+module NewObject {
+	int a = 4;
+	B* b = new B();
+	
+	static int main() {
+		NewObject* newObject = new NewObject();
+
+		int* l = new int(5);
+		int* a = new int[3];
+		a[0] = 4;
+		a[1] = 43;
+		a[2] = 124;
+
+		return newObject.a + newObject.b.c + *l + a[0] + a[1] + a[2];
+	}
+}

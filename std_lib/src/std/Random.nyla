@@ -1,0 +1,40 @@
+import std.Std;
+
+/*
+ * Random number generator using
+ * Linear Congruential Generator PRG
+ * approach
+ */
+module Random {
+	
+	private long mod        = cast(long) 2E+32;
+	private long multiplier = 1664525;
+	private long increment  = 1013904223;
+
+	private long seed;
+
+	Random() {
+		// TODO: System time may not be a good default seed
+		seed = Std.currentNanoTime();
+	}
+
+	Random(long seed) {
+		this.seed = seed;
+	}
+
+	int nextInt() {
+		return next(32);
+	}
+
+	/*
+	 * Generate a new seed which will be
+	 * used for the generated value. Strips
+	 * off nBits (n number of bits) from the
+	 * value to return a number within a given
+	 * bit size.
+	 */
+	private int next(int nBits) {
+		seed = (seed * multiplier + increment) & mod;
+		return cast(int) (seed >> (48 - nBits));
+	}
+}

@@ -47,6 +47,8 @@ namespace nyla {
 		COMPFLAG_DISPLAY_TIMES          = 0x0080,
 	};
 
+	extern llvm::TargetMachine* g_llvm_target_machine;
+
 	/*
 	 * Main class for compilation.
 	 * 
@@ -94,7 +96,52 @@ namespace nyla {
 		void process_files(std::vector<file_location>& source_files);
 		void process_file(const file_location& source_file, sym_table* our_sym_table);
 
-		void analyze_file(sym_table* sym_table);
+		// Parses a file for a given symbol table
+		void parse_file(sym_table* our_sym_table);
+
+		// Parses dependencies found in the imports of the symbol table
+		void parse_dependencies(sym_table* our_sym_table);
+
+		// Resolves the imports and fixes the types associated
+		// with the imported modules
+		void resolve_imports(sym_table* our_sym_table);
+
+		// Resolving the imports of dependencies if they have
+		// not been resolved yet
+		bool resolve_dependency_imports(sym_table* our_sym_table);
+
+		// Performs type checking, flow control checks and more
+		void analyze_file(sym_table* our_sym_table);
+
+		// Analyzes the imported files
+		bool analyze_dependencies(sym_table* our_sym_table);
+
+		// Generates the llvm struct type for the modules in the file
+		void gen_type_declarations(sym_table* our_sym_table);
+
+		// Generating the module declarations for dependencies
+		void gen_dependency_type_declarations(sym_table* our_sym_table);
+
+		// Generates the llvm functions and type fields
+		// for the modules in the file
+		void gen_body_declarations(sym_table* our_sym_table);
+
+		// Generating the function declarations for dependencies
+		void gen_dependency_body_declarations(sym_table* our_sym_table);
+
+		enum file_state {
+			FS_PARSED = 1,
+			FS_IMPORT_RESOLVED,
+			FS_ANALYZED,
+			FS_TYPE_DECL_GEN,
+			FS_BODY_DECL_GEN,
+		};
+
+		// Before a file can process a certain state it's dependencies
+		// must have their states updated to the state needed to process
+		// this certain state. For example, before processing analysis
+		// a file must have it's dependency files parsed and imports resolved
+		void ensure_state(sym_table* dep_sym_table, file_state state);
 
 		bool should_analyze() { return (m_flags & COMPFLAGS_FULL_COMPILATION) >= COMPFLAG_ONLY_PARSE_AND_ANALYZE; }
 		bool should_gen_obj_code() { return (m_flags & COMPFLAGS_FULL_COMPILATION) >= COMPFLAG_ONLY_GEN_OBJECT; }
@@ -158,8 +205,6 @@ namespace nyla {
 		std::string m_main_function_file;
 
 		std::string m_executable_name = "program.exe";
-
-		llvm::TargetMachine* m_llvm_target_machine = nullptr;
 
 	};
 

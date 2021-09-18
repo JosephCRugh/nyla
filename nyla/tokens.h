@@ -141,6 +141,9 @@ namespace nyla {
 	// The word "StatUp" for identifying @StartUp annotations
 	extern u32 startup_ident;
 
+	// The word "memcpy" for external memcpy function
+	extern u32 memcpy_ident;
+
 	// Initialize the reserved_words set
 	void setup_tokens();
 

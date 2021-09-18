@@ -8,6 +8,7 @@ u32 nyla::unidentified_ident;
 u32 nyla::main_ident;
 u32 nyla::length_ident;
 u32 nyla::startup_ident;
+u32 nyla::memcpy_ident;
 
 void nyla::setup_tokens() {
 	reserved_words = {
@@ -60,6 +61,7 @@ void nyla::setup_tokens() {
 	main_ident          = nyla::word::make("main");
 	length_ident        = nyla::word::make("length");
 	nyla::startup_ident = nyla::word::make("StartUp");
+	nyla::memcpy_ident  = nyla::word::make("memcpy");
 
 	for (auto it = reserved_words.begin(); it != reserved_words.end(); it++) {
 		reserved_tag_to_words[it->second] = it->first;

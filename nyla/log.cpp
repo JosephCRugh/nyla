@@ -358,6 +358,10 @@ void nyla::log::err(error_tag tag, const error_payload& payload,
 		std::cerr << "Field is not visible";
 		break;
 	}
+	case ERR_FUNCTION_NOT_VISIBLE: {
+		std::cerr << "Function not visible";
+		break;
+	}
 	case ERR_THIS_KEYWORD_EXPECTS_DOT_OP: {
 		std::cerr << "The 'this' keyword is expected to be followed by a '.' operator";
 		break;
@@ -380,6 +384,10 @@ void nyla::log::err(error_tag tag, const error_payload& payload,
 	}
 	case ERR_CONSTRUCTOR_MARKED_STARTUP: {
 		std::cerr << "Constructors cannot have @StartUp annotation";
+		break;
+	}
+	case ERR_ATTEMPT_TO_DEREFERENCE_NON_POINTER: {
+		std::cerr << "Dereferencing only works on pointers";
 		break;
 	}
 	}

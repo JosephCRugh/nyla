@@ -1,4 +1,5 @@
-import std.IOStream;
+import std.OutStream;
+import std.InStream;
 import std.Bits;
 
 /*
@@ -25,13 +26,16 @@ module Std {
 	  // Win32 function that returns the time as UTC format
 	private static external void GetSystemTimeAsFileTime(Win32FileTime* lpSystemTimeAsFileTime);
 
+	static external byte* memcpy(byte* dest, const byte* src, long count);
+
 
 	private static const int* STD_OUT_HANDLE = GetStdHandle(-11);
 	private static const int* STD_IN_HANDLE  = GetStdHandle(-10);
 	private static const int* STD_ERR_HANDLE = GetStdHandle(-12);
 
-	static IOStream out = var IOStream(STD_OUT_HANDLE);
-	static IOStream err = var IOStream(STD_ERR_HANDLE);
+	static OutStream out = var OutStream(STD_OUT_HANDLE);
+	static OutStream err = var OutStream(STD_ERR_HANDLE);
+	static InStream  in  = var InStream (STD_IN_HANDLE );
 
 	/*
 	 * Puts the current thread to sleep for
@@ -72,4 +76,5 @@ module Std {
 		GetSystemTimeAsFileTime(&fileTime);
 		return Bits.joinInts(fileTime.dwLowDateTime, fileTime.dwHighDateTime) / 10000;
 	}
+
 }

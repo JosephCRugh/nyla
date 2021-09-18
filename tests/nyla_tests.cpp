@@ -29,16 +29,17 @@ void test_program(const std::string& sub_project, int test_error_code, u32 extra
 
 void run_personal_test() {
 	nyla::compiler compiler;
-	compiler.set_flags(nyla::COMPFLAGS_FULL_COMPILATION);
+	compiler.set_flags(nyla::COMPFLAGS_FULL_COMPILATION | nyla::COMPFLAG_DISPLAY_STAGES);
 	std::vector<std::string> src_directories;
 	src_directories.push_back("resources/PersonalLocalTest");
+	src_directories.push_back("../../../../std_lib/src");
 
 	compiler.set_executable_name("nyla_test_project.exe");
 	compiler.compile(src_directories, "Main");
 }
 
 int main(int argc, char* argv[]) {
-	
+
 	test_program("Arithmetic", [](){
 		s32 b = 22;
 		s32 sum = 44 * 3 + 55 - 421 * b;
@@ -96,6 +97,7 @@ int main(int argc, char* argv[]) {
 	test_program("Constructor", 55+22);
 	test_program("StartupAnnotation", 55);
 	test_program("Hexidecimals", -860032909);
+	test_program("NewObject", 61 + 4 + 5 + 4 + 43 + 124);
 
 	return 0;
 }

@@ -54,6 +54,14 @@ bool nyla::type::equals(const nyla::type* o) const {
 		if (o->tag != TYPE_MODULE) return false;
 		return unique_module_key == o->unique_module_key;
 	}
+	case TYPE_PTR: {
+		if (o->tag != TYPE_PTR) return false;
+		if (get_base_type()->tag == TYPE_MODULE) {
+			return ptr_depth == o->ptr_depth
+				&& get_base_type()->equals(o->get_base_type());
+		}
+		return o == this;
+	}
 	default: return o == this; // Simple pointer comparison
 						       // Benefits of the type table
 	}

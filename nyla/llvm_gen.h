@@ -31,7 +31,8 @@ namespace nyla {
 
 		void gen_file_unit();
 
-		void gen_declarations();
+		void gen_type_declarations();
+		void gen_body_declarations();
 
 		void gen_global_initializers(sym_function* sym_main_function,
 			                         const std::vector<nyla::avariable_decl*>& initializer_expressions);
@@ -78,15 +79,20 @@ namespace nyla {
 
 		llvm::Value* gen_type_cast(nyla::atype_cast* type_cast);
 
-		llvm::Value* gen_var_object(llvm::Value* ptr_to_struct, nyla::avar_object* var_object);
+		llvm::Value* gen_object(llvm::Value* ptr_to_struct, nyla::aobject* object);
 
 		llvm::Value* gen_for_loop(nyla::afor_loop* for_loop);
 		llvm::Value* gen_while_loop(nyla::awhile_loop* while_loop);
 		llvm::Value* gen_loop(nyla::aloop_expr* loop_expr);
 
 		llvm::Value* gen_dot_op(nyla::adot_op* dot_op);
+		llvm::Value* gen_dot_op_on_field(sym_variable* sym_variable,
+			                             llvm::Value* ll_location,
+			                             bool is_last_index);
 
 		llvm::Value* gen_if(nyla::aif* ifstmt);
+
+		llvm::Value* gen_new_type(nyla::anew_type* new_type);
 
 		llvm::Type* gen_type(nyla::type* type);
 
@@ -106,6 +112,11 @@ namespace nyla {
 			nyla::type* type,
 			llvm::Value* ll_arr_alloca,
 			u32 depth = 0);
+
+		llvm::Value* gen_malloc(llvm::Type* ll_type_to_alloc, u64 total_mem_size);
+		llvm::Value* gen_malloc(llvm::Type* ll_type_to_alloc,
+			                    u64 total_mem_size,
+			                    llvm::Value* ll_array_size);
 
 		// Unconditionally branches as long as the last statement
 		// was not also a branch
@@ -132,6 +143,7 @@ namespace nyla {
 
 		// Print the IR to console or not
 		bool m_print;
+
 	};
 }
 

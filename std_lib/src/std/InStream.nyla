@@ -1,0 +1,36 @@
+import std.String;
+
+module InStream {
+	
+	private static external bool ReadFile(int*  hFile,
+	                                      char* lpBuffer,
+									      int   nNumberOfBytesToRead,
+									      int*  lpNumberOfBytesRead,
+									      long* lpOverlapped /* Ignored data structure */);
+
+	private int* handle;
+
+	InStream(int* handle) {
+		this.handle = handle;
+	}
+
+	/*
+	 * The console mode determines the behavior of reading.
+	 * The default behavior of console mode is that it should
+	 * keep reading until a carriage return
+	 */
+	int readLine(char[] input, int len) {
+		int numberOfBytesRead;
+		ReadFile(handle, input, len, &numberOfBytesRead, null);
+		return numberOfBytesRead;
+	}
+
+	String* readLine() {
+		char[1024] buffer = ???;
+		int amountRead = readLine(buffer, buffer.length);
+
+		// Since read seems to include two extra characters
+		// subtraction by 2 is necessary
+		return new String(buffer, amountRead - 2);
+	}
+}
